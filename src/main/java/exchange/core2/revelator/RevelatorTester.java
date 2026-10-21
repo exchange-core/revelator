@@ -127,13 +127,13 @@ public final class RevelatorTester {
 //                final Map<String, String> latencyReportFast = Map.of();
                 log.info("{} {} avg={} nanotimes={} tailStrikes={}", tag, latencyReportFast, (int) avgBatch, nanoTimeRequestsCounter, tailStrikes);
 
-                if (xorData != expectedXorData) {
+                if (consumer.xorData != expectedXorData) {
                     throw new IllegalStateException("Inconsistent messages");
 //                    log.debug("Inconsistent messages XOR:{} processedMessages:{}", xorData, processedMessages);
 //                } else {
 //                    log.debug("XOR:{} processedMessages:{}", xorData, processedMessages);
                 }
-                xorData = 0L;
+                consumer.xorData = 0L;
                 processedMessages = 0;
 
 //            if (histogram.getValueAtPercentile(50) > 10_000_000) {
@@ -173,15 +173,15 @@ public final class RevelatorTester {
 //                log.debug("READ data[{}]: {}", k, data);
             }
 
-            xorData = x + (xorData ^ correlationId);
+            consumer.xorData = x + (consumer.xorData ^ correlationId);
 
 //            log.debug("xorData : {}", xorData);
 //                processedMessages++;
 
 //                if ((msg & (0x1F << 6)) == 0) {
 //                if (cx++ == 3) {
-            if (cx++ == 32) {
-                cx = 0;
+            if (consumer.cx++ == 32) {
+                consumer.cx = 0;
                 final long latency = System.nanoTime() - startTimeNs - (timestamp >> 10);
                 hdrRecorder.recordValue(latency);
             }
@@ -196,7 +196,22 @@ public final class RevelatorTester {
     final static int bufferSizeTest = 4 * 1024 * 1024;
     final static SingleWriterRecorder hdrRecorder = new SingleWriterRecorder(Integer.MAX_VALUE, 2);
 
-    static long xorData = 0L;
+    // consumer-written state, padded away from the publisher's statics (startTimeNs is read in its spin loop)
+    static class ConsumerLhsPad {
+        long p01, p02, p03, p04, p05, p06, p07, p08, p09, p10, p11, p12, p13, p14, p15, p16;
+    }
+
+    static class ConsumerFields extends ConsumerLhsPad {
+        long xorData;
+        int cx;
+    }
+
+    static final class ConsumerState extends ConsumerFields {
+        long p17, p18, p19, p20, p21, p22, p23, p24, p25, p26, p27, p28, p29, p30, p31, p32;
+    }
+
+    static final ConsumerState consumer = new ConsumerState();
+
     static int processedMessages = 0;
 
     static long startTimeNs = 0L;
@@ -207,7 +222,6 @@ public final class RevelatorTester {
 
     static double avgBatch = 1;
 
-    static int cx = 0;
 
 
 }

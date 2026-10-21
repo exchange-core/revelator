@@ -12,7 +12,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.locks.LockSupport;
 
 public final class Revelator implements AutoCloseable {
 
@@ -238,8 +237,8 @@ public final class Revelator implements AutoCloseable {
 //            log.debug(" tailFence.getVolatile()={}",tailFence.getVolatile());
             long minSequence;
             while (wrapPoint > (minSequence = Math.min(releasingFence.getAcquire(cachedOutboundPosition), msgStartSequence))) {
-                LockSupport.parkNanos(1L); // TODO: Use waitStrategy to spin? (can cause starvation)
-//                Thread.onSpinWait();
+                // parkNanos(1) sleeps ~50us (timer slack) and collapsed saturated throughput; spin instead
+                Thread.onSpinWait();
 //                Thread.yield();
 
                 tailStrike++;
