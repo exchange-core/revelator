@@ -25,8 +25,9 @@ public final class RawBench implements Bench {
     private final Cursor[] progress;
     private Cursor[] gating;                  // stages the publisher must not lap
 
-    private long nextSeq = 0;
-    private long gateKnown = 0;
+    // publisher-only state in its own padded object: consumers read this object's ring/mask fields, and a
+    // per-message write next to them made every consumer read a cross-core miss
+    private final PublisherState pub = new PublisherState();
 
     public RawBench(Scenario scenario, int ringMsgs, int work, boolean results) {
         this.scenario = scenario;
@@ -99,9 +100,10 @@ public final class RawBench implements Bench {
 
     @Override
     public void publish(final long timestamp, final long key) {
-        final long seq = nextSeq;
-        if (seq - ringMsgs >= gateKnown) {
-            gateKnown = awaitGate(seq - ringMsgs);
+        final PublisherState p = pub;
+        final long seq = p.nextSeq;
+        if (seq - ringMsgs >= p.gateKnown) {
+            p.gateKnown = awaitGate(seq - ringMsgs);
         }
         final int i = (int) (seq & mask) * SLOT;
         ring[i] = timestamp;
@@ -111,7 +113,7 @@ public final class RawBench implements Bench {
         ring[i + 4] = key + 3;
         ring[i + 5] = key + 4;
         ring[i + 6] = key + 5;
-        nextSeq = seq + 1;
+        p.nextSeq = seq + 1;
         published.set(seq + 1);
     }
 
@@ -134,7 +136,7 @@ public final class RawBench implements Bench {
         return stages;
     }
 
-    private long payloadSum(int i) {
+    private static long payloadSum(long[] ring, int i) {
         return ring[i + 1] + ring[i + 2] + ring[i + 3] + ring[i + 4] + ring[i + 5] + ring[i + 6];
     }
 
@@ -175,6 +177,8 @@ public final class RawBench implements Bench {
 
         @Override
         public void run() {
+            final long[] ring = RawBench.this.ring;
+            final long mask = RawBench.this.mask;
             final long[] known = new long[deps.length];
             long pos = 0;
             long available = 0;
@@ -187,7 +191,7 @@ public final class RawBench implements Bench {
                     final int i = (int) (pos & mask) * SLOT;
                     final long key = ring[i + 1];
                     if (stage.accepts(key)) {
-                        final long sum = payloadSum(i);
+                        final long sum = payloadSum(ring, i);
                         final int c = (int) (pos & mask);
                         for (int u = 0; u < upIds.length; u++) {
                             stage.verify(upIds[u], sum, upColumns[u][c]);
@@ -212,6 +216,8 @@ public final class RawBench implements Bench {
             final Stage stage = stages.get(Scenario.SHARDS);
             final Cursor own = progress[Scenario.SHARDS];
             final Cursor[] deps = {published};
+            final long[] ring = RawBench.this.ring;
+            final long mask = RawBench.this.mask;
             final long[] known = new long[1];
             final long[] shardKnown = new long[Scenario.SHARDS];
             long pos = 0;
@@ -232,7 +238,7 @@ public final class RawBench implements Bench {
                         }
                         shardKnown[shard] = v;
                     }
-                    final long sum = payloadSum(i);
+                    final long sum = payloadSum(ring, i);
                     if (results) {
                         stage.verify(shard, sum, columns[shard][(int) (pos & mask)]);
                     }
@@ -252,6 +258,8 @@ public final class RawBench implements Bench {
             final Stage a = stages.get(0), b = stages.get(1), c = stages.get(2);
             final Cursor own = progress[2];
             final Cursor[] deps = {published};
+            final long[] ring = RawBench.this.ring;
+            final long mask = RawBench.this.mask;
             final long[] known = new long[1];
             long pos = 0;
             long available = 0;
@@ -263,7 +271,7 @@ public final class RawBench implements Bench {
                 for (; pos < end; pos++) {
                     final int i = (int) (pos & mask) * SLOT;
                     final long key = ring[i + 1];
-                    final long sum = payloadSum(i);
+                    final long sum = payloadSum(ring, i);
                     a.process(ring[i], key, sum);
                     b.process(ring[i], key, sum);
                     c.process(ring[i], key, sum);
@@ -271,6 +279,19 @@ public final class RawBench implements Bench {
                 own.set(pos);
             }
         }
+    }
+
+    abstract static class PublisherLhsPad {
+        long p01, p02, p03, p04, p05, p06, p07, p08, p09, p10, p11, p12, p13, p14, p15, p16;
+    }
+
+    abstract static class PublisherFields extends PublisherLhsPad {
+        long nextSeq;
+        long gateKnown;
+    }
+
+    static final class PublisherState extends PublisherFields {
+        long p17, p18, p19, p20, p21, p22, p23, p24, p25, p26, p27, p28, p29, p30, p31, p32;
     }
 
     // progress counter padded to 128 bytes on both sides
