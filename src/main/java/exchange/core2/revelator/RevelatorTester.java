@@ -40,7 +40,7 @@ public final class RevelatorTester {
 
             final int indexMask = r.getIndexMask();
 
-            for (int tps = 1_000_000; tps <= 100_000_000; tps += 200_000 + (rand.nextInt(10000) - 5000)) {
+            for (int tps = Integer.getInteger("tps.from", 1_000_000); tps <= Integer.getInteger("tps.to", 100_000_000); tps += Integer.getInteger("tps.step", 200_000) + (rand.nextInt(10000) - 5000)) {
 
                 latch = new CountDownLatch(1);
 
@@ -191,7 +191,7 @@ public final class RevelatorTester {
 
     final static int testMsgSize = 6; // can be 0
 
-    final static int iterationsPerTestCycle = 1_000_000;
+    final static int iterationsPerTestCycle = Integer.getInteger("tps.iterations", 1_000_000);
 
     final static int bufferSizeTest = 4 * 1024 * 1024;
     final static SingleWriterRecorder hdrRecorder = new SingleWriterRecorder(Integer.MAX_VALUE, 2);
