@@ -97,7 +97,7 @@ public class PipelinedFlowProcessor<S extends PipelinedFlowSession> implements I
         for (int i = 0; i < numHandlers; i++) handlerSequence[i] = -1;
 
         long initializerOffset = 0L; // session initializer global offset
-        long nextAvailableOffset;
+        long nextAvailableOffset = 0L; // known end of published messages
 
         boolean isShutdown = false;
 
@@ -134,10 +134,13 @@ public class PipelinedFlowProcessor<S extends PipelinedFlowSession> implements I
                 // otherwise spin on fence volatile read
                 //do {
                 //  workCounter++;
-                nextAvailableOffset = inboundFence.getAcquire(Long.MIN_VALUE);
+                // re-read the fence only when the known range is used up (a header-commit fence scans on every call)
+                if (initializerOffset >= nextAvailableOffset) {
+                    nextAvailableOffset = inboundFence.getAcquire(initializerOffset);
+                }
 
                 if (tailSequence == headSequence && initializerOffset == nextAvailableOffset) {
-                    while (initializerOffset == (nextAvailableOffset = inboundFence.getAcquire(Long.MIN_VALUE))) {
+                    while (initializerOffset == (nextAvailableOffset = inboundFence.getAcquire(initializerOffset))) {
 //                        Thread.yield();
                         Thread.onSpinWait();
 //                        LockSupport.parkNanos(1L);

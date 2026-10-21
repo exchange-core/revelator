@@ -1,5 +1,6 @@
 package exchange.core2.revelator;
 
+import exchange.core2.revelator.fences.HeaderCommitFence;
 import exchange.core2.revelator.fences.IFence;
 import exchange.core2.revelator.fences.SingleWriterFence;
 import exchange.core2.revelator.processors.IFlowProcessor;
@@ -33,6 +34,8 @@ public final class Revelator implements AutoCloseable {
 
     private final IFence releasingFence;
 
+    private final PublicationMode publicationMode;
+
     private final List<Thread> threads = new ArrayList<>();
 
     private long reservedPosition = 0L; // nextValue = single writer sequencer position in Disruptor
@@ -41,11 +44,30 @@ public final class Revelator implements AutoCloseable {
 
     private long tailStrike = 0L;
 
+    private long committedPosition = 0L; // HEADER_COMMIT: messages before it have their commit word written
+
+    /**
+     * How readers learn that a message is complete.
+     */
+    public enum PublicationMode {
+        /** publish() moves a shared cursor (one line every reader polls) */
+        CURSOR,
+        /** publish() writes the commit word of each message, readers scan commit words (see HeaderCommitFence) */
+        HEADER_COMMIT
+    }
+
     private CompletableFuture<Void> shutdownFuture;
 
     public static Revelator create(final int bufferSize,
                                    final IFlowProcessorsFactory flowProcessorsFactory,
                                    final ThreadFactory threadFactory) {
+        return create(bufferSize, flowProcessorsFactory, threadFactory, PublicationMode.CURSOR);
+    }
+
+    public static Revelator create(final int bufferSize,
+                                   final IFlowProcessorsFactory flowProcessorsFactory,
+                                   final ThreadFactory threadFactory,
+                                   final PublicationMode publicationMode) {
 
         if (!BitUtil.isPowerOfTwo(bufferSize)) {
             throw new IllegalArgumentException("Revelator buffer size must be 2^N");
@@ -62,8 +84,13 @@ public final class Revelator implements AutoCloseable {
 
         final long[] buffer = new long[bufferSize];
 
+        // first-level processors read either the cursor or the commit words, the rest of the chain is the same
+        final IFence readersFence = publicationMode == PublicationMode.HEADER_COMMIT
+                ? new HeaderCommitFence(buffer, indexMask)
+                : inboundFence;
+
         final IFlowProcessorsFactory.ProcessorsChain chain = flowProcessorsFactory.createProcessors(
-                inboundFence,
+                readersFence,
                 new RevelatorConfig(indexMask, bufferSize, buffer));
 
 
@@ -74,7 +101,8 @@ public final class Revelator implements AutoCloseable {
                 chain.getProcessors(),
                 threadFactory,
                 inboundFence,
-                chain.getReleasingFence());
+                chain.getReleasingFence(),
+                publicationMode);
     }
 
 
@@ -84,7 +112,8 @@ public final class Revelator implements AutoCloseable {
                       final List<? extends IFlowProcessor> processors,
                       final ThreadFactory threadFactory,
                       final SingleWriterFence inboundFence,
-                      final IFence outboundFence) {
+                      final IFence outboundFence,
+                      final PublicationMode publicationMode) {
 
         this.bufferSize = bufferSize;
         this.indexMask = indexMask;
@@ -93,6 +122,7 @@ public final class Revelator implements AutoCloseable {
         this.threadFactory = threadFactory;
         this.inboundFence = inboundFence;
         this.releasingFence = outboundFence;
+        this.publicationMode = publicationMode;
     }
 
     public synchronized void start() {
@@ -232,7 +262,12 @@ public final class Revelator implements AutoCloseable {
 
             // let processors progress (todo can try do once only if discovered tailFence sill not behind wrap point?)
 //            log.debug("setVolatile msgStartSequence={}",msgStartSequence);
-            inboundFence.setVolatile(msgStartSequence);  // StoreLoad fence
+            // make everything written so far visible, readers must be able to free space for us
+            if (publicationMode == PublicationMode.HEADER_COMMIT) {
+                commitUpTo(msgStartSequence);
+            } else {
+                inboundFence.setVolatile(msgStartSequence);  // StoreLoad fence
+            }
 
 //            log.debug(" tailFence.getVolatile()={}",tailFence.getVolatile());
             long minSequence;
@@ -270,10 +305,35 @@ public final class Revelator implements AutoCloseable {
     }
 
 
+    /**
+     * Makes all messages claimed and written before positionPlusSize visible to readers. Several messages can be
+     * published by one call (batching): pass the end of the last one.
+     */
     public void publish(long positionPlusSize) {
-//        log.debug("PUBLISH positionPlusSize={}", positionPlusSize);
-        inboundFence.setRelease(positionPlusSize);
-        // todo waitStrategy.signalAllWhenBlocking();
+        if (publicationMode == PublicationMode.HEADER_COMMIT) {
+            commitUpTo(positionPlusSize);
+        } else {
+            inboundFence.setRelease(positionPlusSize);
+        }
+    }
+
+    // walks the publisher's own headers (still in its cache) and writes commit words in order
+    private void commitUpTo(final long end) {
+        long pos = committedPosition;
+        while (pos < end) {
+            final int index = (int) (pos & indexMask);
+            if (bufferSize - index < MSG_HEADER_SIZE) {
+                pos = (pos | indexMask) + 1; // implicit padding, no header fits
+            } else if (buffer[index] == 0L) {
+                HeaderCommitFence.commit(buffer, index, pos); // padding header
+                pos = (pos | indexMask) + 1;
+            } else {
+                final long next = pos + MSG_HEADER_SIZE + buffer[index + 2];
+                HeaderCommitFence.commit(buffer, index, pos);
+                pos = next;
+            }
+        }
+        committedPosition = pos;
     }
 
 
