@@ -2,7 +2,7 @@
 
 [![][license img]][license]
 
-Revelator is a **low latency messages processing** framework in Java 17.
+Revelator is a **low latency messages processing** framework in Java 26 (experimental).
 
 ### Features
 
@@ -31,26 +31,32 @@ functionality to provide optimal balance between latency and throughput.
 * Revelator will support extended metrics collection. It can be helpful when identifying bottlenecks of the processing
 pipeline and measuring latency penalties in each processing stage.
 
+### Modules
+
+| Module | Contents |
+|---|---|
+| `revelator-core` | rings, fences, flow processors (simple, pipelined, scalable) |
+| `revelator-raft` | RAFT consensus and replicated state machine (experimental) |
+| `revelator-examples` | payments with two-phase transfers between account shards, primes pipeline |
+| `tests-common` | latency measurement helpers |
+| `tests-perf` | Revelator vs LMAX Disruptor benchmarks, see [tests-perf/README.md](tests-perf/README.md) |
+
 ### Installation
 
-1. Install library into your Maven's local repository by running `mvn install`
+1. Install the modules into your Maven's local repository by running `mvn install`
 2. Add the following Maven dependency to your project's `pom.xml`:
 
 ```
 <dependency>
     <groupId>exchange.core2</groupId>
-    <artifactId>revelator</artifactId>
-    <version>0.1.0</version>
+    <artifactId>revelator-core</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
 </dependency>
 ```
 
 ### Usage examples
 
-TBD
-
-### Testing
-
-TBD
+See `revelator-examples`.
 
 ### Contributing
 
