@@ -8,10 +8,15 @@ import java.util.List;
 /**
  * Hand-written floor: a long[] ring of 64-byte slots, one progress counter per stage, no framework code. Waits
  * re-read only the dependencies whose cached bound is behind; the SHARDED4 join waits for the owner shard only.
+ * Publication: a cursor, or (headerCommit) a commit word in the last long of each slot that readers scan.
  */
 public final class RawBench implements Bench {
 
-    private static final int SLOT = 8;        // longs per message: timestamp, 6 payload longs, 1 spare
+    private static final int SLOT = 8;        // longs per message: timestamp, 6 payload longs, commit word
+    private static final int COMMIT = 7;
+    private static final long COMMIT_MAGIC = 0x5EED_C0DE_D1CE_F00DL;
+    private static final int MAX_SCAN = 64;
+    private static final VarHandle LONGS = MethodHandles.arrayElementVarHandle(long[].class);
     private static final int MAX_BATCH = 512; // a stage publishes its progress at least every 512 messages
 
     private final Scenario scenario;
@@ -21,7 +26,9 @@ public final class RawBench implements Bench {
     private final long mask;
     private final long[] ring;
     private final long[][] columns;           // stage results indexed by sequence (-Dperf.results mode)
+    private final boolean headerCommit;
     private final Cursor published = new Cursor();
+    private final Progress source;            // what first-level stages follow: the cursor or the commit words
     private final Cursor[] progress;
     private Cursor[] gating;                  // stages the publisher must not lap
 
@@ -29,8 +36,10 @@ public final class RawBench implements Bench {
     // per-message write next to them made every consumer read a cross-core miss
     private final PublisherState pub = new PublisherState();
 
-    public RawBench(Scenario scenario, int ringMsgs, int work, boolean results) {
+    public RawBench(Scenario scenario, int ringMsgs, int work, boolean results, boolean headerCommit) {
         this.scenario = scenario;
+        this.headerCommit = headerCommit;
+        this.source = headerCommit ? new CommitScan() : published;
         this.stages = Bench.createStages(scenario, work);
         this.results = results && scenario != Scenario.PIPELINE3_1T;
         this.ringMsgs = ringMsgs;
@@ -53,11 +62,11 @@ public final class RawBench implements Bench {
         final List<Runnable> runners = new ArrayList<>();
         switch (scenario) {
             case UNICAST -> {
-                runners.add(runner(0, published));
+                runners.add(runner(0, source));
                 gating = new Cursor[]{progress[0]};
             }
             case PIPELINE3 -> {
-                runners.add(runner(0, published));
+                runners.add(runner(0, source));
                 runners.add(runner(1, progress[0]));
                 runners.add(runner(2, progress[1]));
                 gating = new Cursor[]{progress[2]};
@@ -67,20 +76,20 @@ public final class RawBench implements Bench {
                 gating = new Cursor[]{progress[2]};
             }
             case MULTICAST3 -> {
-                runners.add(runner(0, published));
-                runners.add(runner(1, published));
-                runners.add(runner(2, published));
+                runners.add(runner(0, source));
+                runners.add(runner(1, source));
+                runners.add(runner(2, source));
                 gating = new Cursor[]{progress[0], progress[1], progress[2]};
             }
             case DIAMOND -> {
-                runners.add(runner(0, published));
-                runners.add(runner(1, published));
+                runners.add(runner(0, source));
+                runners.add(runner(1, source));
                 runners.add(runner(2, progress[0], progress[1]));
                 gating = new Cursor[]{progress[2]};
             }
             case SHARDED4 -> {
                 for (int i = 0; i < Scenario.SHARDS; i++) {
-                    runners.add(runner(i, published));
+                    runners.add(runner(i, source));
                 }
                 runners.add(new JoinRunner());
                 gating = progress.clone();
@@ -89,7 +98,7 @@ public final class RawBench implements Bench {
         runners.forEach(r -> threadFactory.newThread(r).start());
     }
 
-    private StageRunner runner(int stage, Cursor... deps) {
+    private StageRunner runner(int stage, Progress... deps) {
         final int[] upIds = results ? Bench.upstreamResults(scenario, stage) : new int[0];
         final long[][] upColumns = new long[upIds.length][];
         for (int i = 0; i < upIds.length; i++) {
@@ -99,10 +108,11 @@ public final class RawBench implements Bench {
     }
 
     @Override
-    public void publish(final long timestamp, final long key) {
+    public void write(final long timestamp, final long key) {
         final PublisherState p = pub;
         final long seq = p.nextSeq;
         if (seq - ringMsgs >= p.gateKnown) {
+            flush(); // readers must see everything written before we wait for them
             p.gateKnown = awaitGate(seq - ringMsgs);
         }
         final int i = (int) (seq & mask) * SLOT;
@@ -114,7 +124,19 @@ public final class RawBench implements Bench {
         ring[i + 5] = key + 4;
         ring[i + 6] = key + 5;
         p.nextSeq = seq + 1;
-        published.set(seq + 1);
+    }
+
+    @Override
+    public void flush() {
+        final PublisherState p = pub;
+        if (headerCommit) {
+            for (long s = p.committedSeq; s < p.nextSeq; s++) {
+                LONGS.setRelease(ring, (int) (s & mask) * SLOT + COMMIT, (s + 1) ^ COMMIT_MAGIC);
+            }
+            p.committedSeq = p.nextSeq;
+        } else {
+            published.set(p.nextSeq);
+        }
     }
 
     private long awaitGate(long wrapSeq) {
@@ -143,12 +165,12 @@ public final class RawBench implements Bench {
     /**
      * @return the smallest bound of the dependencies, greater than pos; re-reads only the ones known to be behind
      */
-    private static long await(long pos, Cursor[] deps, long[] known) {
+    private static long await(long pos, Progress[] deps, long[] known) {
         long min = Long.MAX_VALUE;
         for (int d = 0; d < deps.length; d++) {
             long v = known[d];
             if (v <= pos) {
-                while ((v = deps[d].get()) <= pos) {
+                while ((v = deps[d].upTo(pos)) <= pos) {
                     Thread.onSpinWait();
                 }
                 known[d] = v;
@@ -161,12 +183,12 @@ public final class RawBench implements Bench {
     private final class StageRunner implements Runnable {
         private final Stage stage;
         private final Cursor own;
-        private final Cursor[] deps;
+        private final Progress[] deps;
         private final long[] column;
         private final int[] upIds;
         private final long[][] upColumns;
 
-        StageRunner(Stage stage, Cursor own, Cursor[] deps, long[] column, int[] upIds, long[][] upColumns) {
+        StageRunner(Stage stage, Cursor own, Progress[] deps, long[] column, int[] upIds, long[][] upColumns) {
             this.stage = stage;
             this.own = own;
             this.deps = deps;
@@ -215,7 +237,7 @@ public final class RawBench implements Bench {
         public void run() {
             final Stage stage = stages.get(Scenario.SHARDS);
             final Cursor own = progress[Scenario.SHARDS];
-            final Cursor[] deps = {published};
+            final Progress[] deps = {source};
             final long[] ring = RawBench.this.ring;
             final long mask = RawBench.this.mask;
             final long[] known = new long[1];
@@ -257,7 +279,7 @@ public final class RawBench implements Bench {
         public void run() {
             final Stage a = stages.get(0), b = stages.get(1), c = stages.get(2);
             final Cursor own = progress[2];
-            final Cursor[] deps = {published};
+            final Progress[] deps = {source};
             final long[] ring = RawBench.this.ring;
             final long mask = RawBench.this.mask;
             final long[] known = new long[1];
@@ -288,10 +310,34 @@ public final class RawBench implements Bench {
     abstract static class PublisherFields extends PublisherLhsPad {
         long nextSeq;
         long gateKnown;
+        long committedSeq;
     }
 
     static final class PublisherState extends PublisherFields {
         long p17, p18, p19, p20, p21, p22, p23, p24, p25, p26, p27, p28, p29, p30, p31, p32;
+    }
+
+    /**
+     * Messages available to a reader at position pos: a counter ignores pos, a commit scan starts from it.
+     */
+    interface Progress {
+        long upTo(long pos);
+    }
+
+    /**
+     * Header-commit reader side: counts consecutive committed slots from pos (at most MAX_SCAN per call).
+     */
+    private final class CommitScan implements Progress {
+        @Override
+        public long upTo(final long pos) {
+            final long[] ring = RawBench.this.ring;
+            long s = pos;
+            final long limit = pos + MAX_SCAN;
+            while (s < limit && (long) LONGS.getAcquire(ring, (int) (s & mask) * SLOT + COMMIT) == ((s + 1) ^ COMMIT_MAGIC)) {
+                s++;
+            }
+            return s;
+        }
     }
 
     // progress counter padded to 128 bytes on both sides
@@ -303,7 +349,7 @@ public final class RawBench implements Bench {
         long value;
     }
 
-    static final class Cursor extends CursorValue {
+    static final class Cursor extends CursorValue implements Progress {
         long p17, p18, p19, p20, p21, p22, p23, p24, p25, p26, p27, p28, p29, p30, p31, p32;
 
         private static final VarHandle VALUE;
@@ -318,6 +364,11 @@ public final class RawBench implements Bench {
 
         long get() {
             return (long) VALUE.getAcquire(this);
+        }
+
+        @Override
+        public long upTo(long pos) {
+            return get();
         }
 
         void set(long v) {

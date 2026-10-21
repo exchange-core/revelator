@@ -11,8 +11,11 @@ public interface Bench {
     /** Starts consumer threads (created through the given factory, in stage order). */
     void start(PinnedThreadFactory threadFactory);
 
-    /** Publishes one message: timestamp plus a 6-long payload key, key+1 .. key+5. */
-    void publish(long timestamp, long key);
+    /** Writes one message: timestamp plus a 6-long payload key, key+1 .. key+5; readers may not see it before flush. */
+    void write(long timestamp, long key);
+
+    /** Makes every message written so far visible (one publication for a whole batch). */
+    void flush();
 
     /** All stages in thread order; terminal ones record latency and are checked for completion. */
     List<Stage> stages();

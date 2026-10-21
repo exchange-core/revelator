@@ -26,10 +26,13 @@ public final class RevelatorBench implements Bench {
     private final int ringLongs;
     private final boolean results;
     private final long[][] columns; // stage results indexed by message position, one writer each (-Dperf.results)
+    private final Revelator.PublicationMode publicationMode;
     private Revelator revelator;
+    private long writtenEnd;        // end of the last written message
 
-    public RevelatorBench(Scenario scenario, int ringLongs, int work, boolean results) {
+    public RevelatorBench(Scenario scenario, int ringLongs, int work, boolean results, Revelator.PublicationMode publicationMode) {
         this.scenario = scenario;
+        this.publicationMode = publicationMode;
         this.ringLongs = ringLongs;
         this.stages = Bench.createStages(scenario, work);
         this.results = results && scenario != Scenario.PIPELINE3_1T;
@@ -43,7 +46,7 @@ public final class RevelatorBench implements Bench {
 
     @Override
     public void start(PinnedThreadFactory threadFactory) {
-        revelator = Revelator.create(ringLongs, factory(), threadFactory);
+        revelator = Revelator.create(ringLongs, factory(), threadFactory, publicationMode);
         revelator.start();
     }
 
@@ -97,10 +100,15 @@ public final class RevelatorBench implements Bench {
     }
 
     @Override
-    public void publish(final long timestamp, final long key) {
+    public void write(final long timestamp, final long key) {
         final long seq = revelator.claimSingleMessage(PAYLOAD_LONGS, timestamp, key & 0x00FF_FFFF_FFFF_FFFFL, MSG_TYPE);
         revelator.writeLongData(seq, 0, key, key + 1, key + 2, key + 3, key + 4, key + 5);
-        revelator.publish(seq + PAYLOAD_LONGS);
+        writtenEnd = seq + PAYLOAD_LONGS;
+    }
+
+    @Override
+    public void flush() {
+        revelator.publish(writtenEnd);
     }
 
     @Override

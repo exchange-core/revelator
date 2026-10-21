@@ -1,6 +1,7 @@
 package exchange.core2.revelator.perf;
 
 import exchange.core2.collections.affinity.CpuAffinity;
+import exchange.core2.revelator.Revelator;
 import org.HdrHistogram.Histogram;
 
 import java.io.FileWriter;
@@ -27,6 +28,9 @@ import java.util.Locale;
  *                event, Revelator and raw into a separate column per stage
  * perf.ringMsgs  Disruptor ring size; Revelator gets ringMsgs*8 longs, about the same bytes (default 131072)
  * perf.maxBatch  Disruptor maxBatchSize (default unlimited, as in the DSL)
+ * perf.batch     publisher makes messages visible every N messages (default 1) and always before it waits for
+ *                the schedule, so batching never delays a message the publisher could not have followed anyway
+ * perf.publication  cursor | header (commit word per message; Revelator and raw only)
  * perf.cpus      publisher CPU, then consumer CPUs (default: reserved/isolated CPUs, highest first)
  * perf.out       CSV file to append results to, perf.label - run label for it
  * </pre>
@@ -39,12 +43,14 @@ public final class PerfMain {
 
     private final Bench bench;
     private final List<Stage> terminals;
+    private final int batch;
 
     private long nextKey = 0;      // messages published so far
     private long expectedSum = 0;  // checksum every terminal stage must reach
 
-    private PerfMain(Bench bench) {
+    private PerfMain(Bench bench, int batch) {
         this.bench = bench;
+        this.batch = batch;
         this.terminals = bench.stages().stream().filter(Stage::isTerminal).toList();
     }
 
@@ -61,17 +67,28 @@ public final class PerfMain {
         final int ringMsgs = Integer.getInteger("perf.ringMsgs", 131072);
         final int maxBatch = Integer.getInteger("perf.maxBatch", Integer.MAX_VALUE);
         final boolean results = Boolean.getBoolean("perf.results");
+        final int batch = Integer.getInteger("perf.batch", 1);
+        final boolean headerCommit = switch (System.getProperty("perf.publication", "cursor")) {
+            case "cursor" -> false;
+            case "header" -> true;
+            default -> throw new IllegalArgumentException("perf.publication: cursor | header");
+        };
+        if (headerCommit && impl.equals("disruptor")) {
+            throw new IllegalArgumentException("Disruptor has no header-commit publication");
+        }
         final int[] cpus = cpus(scenario.threads + 1);
 
         final Bench bench = switch (impl) {
-            case "revelator" -> new RevelatorBench(scenario, ringMsgs * 8, work, results);
+            case "revelator" -> new RevelatorBench(scenario, ringMsgs * 8, work, results,
+                    headerCommit ? Revelator.PublicationMode.HEADER_COMMIT : Revelator.PublicationMode.CURSOR);
             case "disruptor" -> new DisruptorBench(scenario, ringMsgs, work, maxBatch, results);
-            case "raw" -> new RawBench(scenario, ringMsgs, work, results);
+            case "raw" -> new RawBench(scenario, ringMsgs, work, results, headerCommit);
             default -> throw new IllegalArgumentException("perf.impl: " + impl);
         };
 
-        System.out.printf("%s %s publisher cpu %d, consumers %s, work=%d, results=%s, ringMsgs=%d%n",
-                impl, scenario, cpus[0], Arrays.toString(Arrays.copyOfRange(cpus, 1, cpus.length)), work, results, ringMsgs);
+        System.out.printf("%s %s publisher cpu %d, consumers %s, work=%d, results=%s, batch=%d, publication=%s, ringMsgs=%d%n",
+                impl, scenario, cpus[0], Arrays.toString(Arrays.copyOfRange(cpus, 1, cpus.length)), work, results,
+                batch, headerCommit ? "header" : "cursor", ringMsgs);
 
         // consumer threads are created before the publisher pins itself, so they never inherit its single CPU
         bench.start(new PinnedThreadFactory(Arrays.copyOfRange(cpus, 1, cpus.length)));
@@ -80,7 +97,7 @@ public final class PerfMain {
         final String prefix = System.getProperty("perf.label", "") + "," + impl + "," + scenario + ",";
 
         try (CpuAffinity ignore = CpuAffinity.acquireCore(cpus[0])) {
-            final PerfMain perf = new PerfMain(bench);
+            final PerfMain perf = new PerfMain(bench, batch);
 
             for (int i = 0; i < 3; i++) {
                 perf.latencyStep(Math.min(1.0, rates[0]), 0.5);
@@ -142,17 +159,33 @@ public final class PerfMain {
 
     private void sendPaced(final long t0, final long periodFp, final long from, final long to) {
         final Bench b = bench;
+        final int batch = this.batch;
         long key = nextKey;
         long sum = expectedSum;
         long now = System.nanoTime();
+        int pending = 0;
         for (long j = from; j < to; j++) {
             final long due = t0 + ((j * periodFp) >> 10);
-            while (now < due) {
-                now = System.nanoTime();
+            if (now < due) {
+                // ahead of schedule: publish what is written before waiting
+                if (pending != 0) {
+                    b.flush();
+                    pending = 0;
+                }
+                do {
+                    now = System.nanoTime();
+                } while (now < due);
             }
-            b.publish(due, key);
+            b.write(due, key);
+            if (++pending == batch) {
+                b.flush();
+                pending = 0;
+            }
             sum += Stage.payloadSum(key);
             key++;
+        }
+        if (pending != 0) {
+            b.flush();
         }
         nextKey = key;
         expectedSum = sum;
@@ -174,12 +207,21 @@ public final class PerfMain {
     private void sendBurst(final long count) {
         final Bench b = bench;
         final long timestamp = System.nanoTime();
+        final int batch = this.batch;
         long key = nextKey;
         long sum = expectedSum;
+        int pending = 0;
         for (long j = 0; j < count; j++) {
-            b.publish(timestamp, key);
+            b.write(timestamp, key);
+            if (++pending == batch) {
+                b.flush();
+                pending = 0;
+            }
             sum += Stage.payloadSum(key);
             key++;
+        }
+        if (pending != 0) {
+            b.flush();
         }
         nextKey = key;
         expectedSum = sum;

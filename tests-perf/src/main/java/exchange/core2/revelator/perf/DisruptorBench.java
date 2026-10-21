@@ -23,6 +23,7 @@ public final class DisruptorBench implements Bench {
     private final int maxBatch;
     private final boolean results;
     private RingBuffer<Event> ringBuffer;
+    private long writtenSeq;
 
     public DisruptorBench(Scenario scenario, int ringSize, int work, int maxBatch, boolean results) {
         this.scenario = scenario;
@@ -68,7 +69,7 @@ public final class DisruptorBench implements Bench {
     }
 
     @Override
-    public void publish(final long timestamp, final long key) {
+    public void write(final long timestamp, final long key) {
         final long seq = ringBuffer.next();
         final Event e = ringBuffer.get(seq);
         e.timestamp = timestamp;
@@ -78,7 +79,13 @@ public final class DisruptorBench implements Bench {
         e.v3 = key + 3;
         e.v4 = key + 4;
         e.v5 = key + 5;
-        ringBuffer.publish(seq);
+        writtenSeq = seq;
+    }
+
+    // single producer: publishing the highest sequence publishes everything before it
+    @Override
+    public void flush() {
+        ringBuffer.publish(writtenSeq);
     }
 
     @Override
