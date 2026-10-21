@@ -234,7 +234,7 @@ public class PipelinedFlowProcessor<S extends PipelinedFlowSession> implements I
                     }
 
                     if (session.messageType == Revelator.MSG_TYPE_TEST_CONTROL) {
-                        final long data = buffer[index + 3];
+                        final long data = buffer[index + Revelator.MSG_HEADER_SIZE];
                         if (data == 1073923874826736264L) {
                             //log.debug("{} spin:{} miss:{}", this, dataSpinCounter, Arrays.toString(missCounters));
                             Arrays.fill(missCounters, 0L);

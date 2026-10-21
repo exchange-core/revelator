@@ -237,7 +237,8 @@ public final class Revelator implements AutoCloseable {
         buffer[index] = msgTypeEncoded | correlationId;
         buffer[index + 1] = timestamp;
         buffer[index + 2] = claimingPayloadSize;
-        buffer[index + 3] = 0L;
+        // buffer[index + 3]: commit word, written by publish() in HEADER_COMMIT mode, unused with CURSOR;
+        // no placeholder write here - a second store to that line would cost a second ownership transfer
 
         final long payloadStartSeq = msgStartSequence + MSG_HEADER_SIZE;
 
