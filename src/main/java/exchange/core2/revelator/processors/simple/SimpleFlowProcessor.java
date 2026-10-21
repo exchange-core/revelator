@@ -21,6 +21,10 @@ public final class SimpleFlowProcessor implements IFlowProcessor {
     private final long[] buffer;
     private final int bufferSize;
 
+    // release consumed space at least this often (in longs): with an unbounded batch a full ring was released only
+    // after processing all of it, so publisher and consumer took turns instead of running in parallel
+    private static final int RELEASE_EVERY = Integer.getInteger("revelator.releaseEvery", 4096);
+
     private long superCounter;
 
     public SimpleFlowProcessor(final SimpleMessageHandler handler,
@@ -38,6 +42,7 @@ public final class SimpleFlowProcessor implements IFlowProcessor {
     public void run() {
 
         long positionSeq = 0L;
+        long releasedSeq = 0L;
 
         while (true) {
 
@@ -135,6 +140,11 @@ public final class SimpleFlowProcessor implements IFlowProcessor {
 //                    releasingFence.setRelease(positionSeq);
 
                     positionSeq += Revelator.MSG_HEADER_SIZE + payloadSize;
+
+                    if (positionSeq - releasedSeq >= RELEASE_EVERY) {
+                        releasingFence.setRelease(positionSeq);
+                        releasedSeq = positionSeq;
+                    }
                 }
 
 //                releasingFence.setRelease(positionSeq);
@@ -142,6 +152,7 @@ public final class SimpleFlowProcessor implements IFlowProcessor {
 
 //            log.debug("RELEASE {}", availableSeq);
             releasingFence.setRelease(availableSeq);
+            releasedSeq = availableSeq;
         }
 
     }
