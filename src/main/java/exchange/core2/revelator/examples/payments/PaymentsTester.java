@@ -180,7 +180,7 @@ public final class PaymentsTester {
 
             int transferSetIdx = 0;
 
-            for (int tps1 = 800_000; tps1 <= 7_000_000; tps1 += 100_000) {
+            for (int tps1 = Integer.getInteger("payments.tpsFrom", 800_000); tps1 <= Integer.getInteger("payments.tpsTo", 7_000_000); tps1 += Integer.getInteger("payments.tpsStep", 100_000)) {
 
                 final int tps = tps1 + (rand.nextInt(1000) - 500);
 
