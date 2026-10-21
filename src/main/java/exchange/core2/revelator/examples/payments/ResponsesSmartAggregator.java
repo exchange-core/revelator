@@ -4,7 +4,6 @@ import exchange.core2.revelator.Revelator;
 import exchange.core2.revelator.buffers.LocalResultsLongBuffer;
 import exchange.core2.revelator.fences.IFence;
 import exchange.core2.revelator.processors.simple.SimpleMessageHandler;
-import jdk.internal.vm.annotation.Contended;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -19,21 +18,15 @@ public final class ResponsesSmartAggregator implements SimpleMessageHandler {
 
     private final long handlersMask;
 
-    @Contended
     private int lastAddr;
 
-    @Contended
     private int spinsCounter1 = 0;
 
-    @Contended
     private int spinsCounter2 = 0;
 
-    @Contended
     private int hit1Counter = 0;
-    @Contended
     private int hit2Counter = 0;
 
-    @Contended
     private final long[] fencesCache;
 
     public ResponsesSmartAggregator(final LocalResultsLongBuffer[] resultsBuffers,

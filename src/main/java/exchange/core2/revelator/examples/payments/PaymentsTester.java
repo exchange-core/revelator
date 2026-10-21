@@ -5,8 +5,7 @@ import exchange.core2.benchmarks.generator.currencies.CurrenciesGenerator;
 import exchange.core2.revelator.Revelator;
 import exchange.core2.revelator.utils.AffinityThreadFactory;
 import exchange.core2.revelator.utils.LatencyTools;
-import net.openhft.affinity.Affinity;
-import net.openhft.affinity.AffinityLock;
+import exchange.core2.collections.affinity.CpuAffinity;
 import org.HdrHistogram.Histogram;
 import org.HdrHistogram.SingleWriterRecorder;
 import org.agrona.collections.Hashing;
@@ -53,9 +52,9 @@ public final class PaymentsTester {
 
         log.info("Currencies: {}", currencies);
 
-        final int accountsToCreate = 10_000_000;
+        final int accountsToCreate = Integer.getInteger("payments.accounts", 10_000_000);
         final int transfersToCreate = 1_000_000;
-        final int iterations = 10;
+        final int iterations = Integer.getInteger("payments.iterations", 10);
 
         final Map<Integer, Double> currencyRates = CurrenciesGenerator.generateRandomRates(currencies.keySet().stream(), 2.2, seed);
         log.info("Rates: {}", currencyRates);
@@ -94,10 +93,15 @@ public final class PaymentsTester {
 
 //        final PaymentsCore paymentsCore = PaymentsCore.createSimple(responseHandler, threadFactory);
 
-        final int processingThreadsNum = 8;
-        final PaymentsCore paymentsCore = PaymentsCore.createPipelined(responseHandler, threadFactory, processingThreadsNum);
-//        final PaymentsCore paymentsCore = PaymentsCore.createParallel(responseHandler, threadFactory, processingThreadsNum);
-        log.info("Configuration {} threads {}", processingThreadsNum, affinityMode);
+        // -Dpayments.mode=pipelined|parallel|simple, -Dpayments.threads=2^N (shards; +1 results thread +1 publisher)
+        final String mode = System.getProperty("payments.mode", "pipelined");
+        final int processingThreadsNum = Integer.getInteger("payments.threads", 4);
+        final PaymentsCore paymentsCore = switch (mode) {
+            case "parallel" -> PaymentsCore.createParallel(responseHandler, threadFactory, processingThreadsNum);
+            case "simple" -> PaymentsCore.createSimple(responseHandler, threadFactory);
+            default -> PaymentsCore.createPipelined(responseHandler, threadFactory, processingThreadsNum);
+        };
+        log.info("Configuration {} {} threads {}", mode, processingThreadsNum, affinityMode);
 
         log.info("Starting payments core ...");
         paymentsCore.start();
@@ -149,7 +153,7 @@ public final class PaymentsTester {
         log.info("Generated {} maxBalances", maxBalances.size());
 //        maxBalances.forEachKeyValue((acc, maxbal) -> log.debug("MAX-BAL: {}={}", acc, maxbal));
 
-        try (AffinityLock lock = Affinity.acquireCore()) {
+        try (CpuAffinity lock = CpuAffinity.acquireCore()) {
 
             log.info("Opening {} accounts with {} positive balances...", accounts.length, maxBalances.size());
 

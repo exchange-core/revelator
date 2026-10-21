@@ -3,7 +3,6 @@ package exchange.core2.revelator.examples.payments;
 import exchange.core2.revelator.Revelator;
 import exchange.core2.revelator.buffers.LocalResultsByteBuffer;
 import exchange.core2.revelator.processors.simple.SimpleMessageHandler;
-import jdk.internal.vm.annotation.Contended;
 
 public final class ResponsesAggregator implements SimpleMessageHandler {
 
@@ -11,10 +10,8 @@ public final class ResponsesAggregator implements SimpleMessageHandler {
     private final IPaymentsResponseHandler responseHandler;
 
 
-    @Contended
     private int lastAddr;
 
-    @Contended
     private long[] requestsBuffer;
 
     public ResponsesAggregator(LocalResultsByteBuffer resultsBuffer,

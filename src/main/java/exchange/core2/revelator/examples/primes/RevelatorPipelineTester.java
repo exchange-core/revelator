@@ -1,7 +1,10 @@
 package exchange.core2.revelator.examples.primes;
 
+import exchange.core2.revelator.Revelator;
+import exchange.core2.revelator.processors.ProcessorsFactories;
+import exchange.core2.revelator.utils.AffinityThreadFactory;
 import exchange.core2.revelator.utils.LatencyTools;
-import net.openhft.affinity.AffinityLock;
+import exchange.core2.collections.affinity.CpuAffinity;
 import org.HdrHistogram.Histogram;
 import org.HdrHistogram.SingleWriterRecorder;
 import org.slf4j.Logger;
@@ -36,7 +39,7 @@ public final class RevelatorPipelineTester {
 
         hdrRecorder.reset();
 
-        try (final AffinityLock lock = AffinityLock.acquireCore()) {
+        try (final CpuAffinity lock = CpuAffinity.acquireCore()) {
 
 
             final Mac mac = Mac.getInstance(HMAC_SHA_256);
@@ -57,7 +60,7 @@ public final class RevelatorPipelineTester {
 
             r.start();
 
-            log.debug("Starting publisher on core: {}", lock.cpuId());
+            log.debug("Starting publisher on core: {}", lock.cpu());
 
             final int indexMask = r.getIndexMask();
 
