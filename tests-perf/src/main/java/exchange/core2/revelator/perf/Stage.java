@@ -14,6 +14,7 @@ abstract class StageLhsPad {
 abstract class StageFields extends StageLhsPad {
     long checksum;
     long sink;
+    long errors;    // upstream results that did not match
     long processed; // read by the producer thread to detect completion
 }
 
@@ -41,13 +42,15 @@ public final class Stage extends StageRhsPad {
     }
 
     private final String name;
+    private final int id;         // index in the scenario's stage list
     private final long shard;     // -1: every message, otherwise only keys with (key & shardMask) == shard
     private final long shardMask;
     private final int work;       // extra dependent multiply-adds per message
     private final SingleWriterRecorder recorder; // null unless the stage ends the scenario
 
-    Stage(String name, int shard, int shards, int work, boolean terminal) {
+    Stage(String name, int id, int shard, int shards, int work, boolean terminal) {
         this.name = name;
+        this.id = id;
         this.shard = shard;
         this.shardMask = shards - 1;
         this.work = work;
@@ -58,7 +61,10 @@ public final class Stage extends StageRhsPad {
         return shard < 0 || (key & shardMask) == shard;
     }
 
-    void process(final long timestamp, final long key, final long payloadSum) {
+    /**
+     * @return the stage result for this message (written somewhere only in -Dperf.results mode)
+     */
+    long process(final long timestamp, final long key, final long payloadSum) {
         checksum += payloadSum;
         if (work > 0) {
             long x = payloadSum;
@@ -71,6 +77,28 @@ public final class Stage extends StageRhsPad {
             recorder.recordValue(Math.max(0L, System.nanoTime() - timestamp));
         }
         PROCESSED.setRelease(this, processed + 1);
+        return resultOf(id, payloadSum);
+    }
+
+    /**
+     * Checks a result written by an upstream stage for the same message.
+     */
+    void verify(final int upstreamId, final long payloadSum, final long value) {
+        if (value != resultOf(upstreamId, payloadSum)) {
+            errors++;
+        }
+    }
+
+    static long resultOf(int stageId, long payloadSum) {
+        return payloadSum * (stageId + 2);
+    }
+
+    long errors() {
+        return errors;
+    }
+
+    int id() {
+        return id;
     }
 
     long processed() {

@@ -20,21 +20,32 @@ public interface Bench {
     static List<Stage> createStages(Scenario scenario, int work) {
         return switch (scenario) {
             case UNICAST -> List.of(
-                    new Stage("A", -1, 1, work, true));
-            case PIPELINE3, DIAMOND -> List.of(
-                    new Stage("A", -1, 1, work, false),
-                    new Stage("B", -1, 1, work, false),
-                    new Stage("C", -1, 1, work, true));
+                    new Stage("A", 0, -1, 1, work, true));
+            case PIPELINE3, PIPELINE3_1T, DIAMOND -> List.of(
+                    new Stage("A", 0, -1, 1, work, false),
+                    new Stage("B", 1, -1, 1, work, false),
+                    new Stage("C", 2, -1, 1, work, true));
             case MULTICAST3 -> List.of(
-                    new Stage("A", -1, 1, work, true),
-                    new Stage("B", -1, 1, work, true),
-                    new Stage("C", -1, 1, work, true));
+                    new Stage("A", 0, -1, 1, work, true),
+                    new Stage("B", 1, -1, 1, work, true),
+                    new Stage("C", 2, -1, 1, work, true));
             case SHARDED4 -> List.of(
-                    new Stage("S0", 0, Scenario.SHARDS, work, false),
-                    new Stage("S1", 1, Scenario.SHARDS, work, false),
-                    new Stage("S2", 2, Scenario.SHARDS, work, false),
-                    new Stage("S3", 3, Scenario.SHARDS, work, false),
-                    new Stage("J", -1, 1, work, true));
+                    new Stage("S0", 0, 0, Scenario.SHARDS, work, false),
+                    new Stage("S1", 1, 1, Scenario.SHARDS, work, false),
+                    new Stage("S2", 2, 2, Scenario.SHARDS, work, false),
+                    new Stage("S3", 3, 3, Scenario.SHARDS, work, false),
+                    new Stage("J", 4, -1, 1, work, true));
+        };
+    }
+
+    /**
+     * Stages whose result a stage reads in -Dperf.results mode (the SHARDED4 join reads the owner shard instead).
+     */
+    static int[] upstreamResults(Scenario scenario, int stage) {
+        return switch (scenario) {
+            case PIPELINE3 -> stage == 0 ? new int[0] : new int[]{stage - 1};
+            case DIAMOND -> stage == 2 ? new int[]{0, 1} : new int[0];
+            default -> new int[0];
         };
     }
 }

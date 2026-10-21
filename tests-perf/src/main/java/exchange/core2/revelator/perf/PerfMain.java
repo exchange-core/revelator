@@ -17,12 +17,14 @@ import java.util.Locale;
 /**
  * Revelator vs Disruptor on the same scenario, one framework per JVM. Settings (system properties):
  * <pre>
- * perf.impl      revelator | disruptor
- * perf.scenario  UNICAST | PIPELINE3 | MULTICAST3 | DIAMOND | SHARDED4
+ * perf.impl      revelator | disruptor | raw (hand-written ring, the floor)
+ * perf.scenario  UNICAST | PIPELINE3 | PIPELINE3_1T | MULTICAST3 | DIAMOND | SHARDED4
  * perf.rates     offered loads for the latency phase, millions of messages per second (default 1,5,10,20)
  * perf.seconds   duration of each latency step (default 2)
  * perf.burst     messages per throughput burst (default 20M), perf.bursts - number of bursts (default 5)
  * perf.work      extra multiply-adds per message in every stage (default 0 - pure transport)
+ * perf.results   stages write a result that downstream stages read and verify (default false): Disruptor into the
+ *                event, Revelator and raw into a separate column per stage
  * perf.ringMsgs  Disruptor ring size; Revelator gets ringMsgs*8 longs, about the same bytes (default 131072)
  * perf.maxBatch  Disruptor maxBatchSize (default unlimited, as in the DSL)
  * perf.cpus      publisher CPU, then consumer CPUs (default: reserved/isolated CPUs, highest first)
@@ -58,16 +60,18 @@ public final class PerfMain {
         final int work = Integer.getInteger("perf.work", 0);
         final int ringMsgs = Integer.getInteger("perf.ringMsgs", 131072);
         final int maxBatch = Integer.getInteger("perf.maxBatch", Integer.MAX_VALUE);
+        final boolean results = Boolean.getBoolean("perf.results");
         final int[] cpus = cpus(scenario.threads + 1);
 
         final Bench bench = switch (impl) {
-            case "revelator" -> new RevelatorBench(scenario, ringMsgs * 8, work);
-            case "disruptor" -> new DisruptorBench(scenario, ringMsgs, work, maxBatch);
+            case "revelator" -> new RevelatorBench(scenario, ringMsgs * 8, work, results);
+            case "disruptor" -> new DisruptorBench(scenario, ringMsgs, work, maxBatch, results);
+            case "raw" -> new RawBench(scenario, ringMsgs, work, results);
             default -> throw new IllegalArgumentException("perf.impl: " + impl);
         };
 
-        System.out.printf("%s %s publisher cpu %d, consumers %s, work=%d, ringMsgs=%d%n",
-                impl, scenario, cpus[0], Arrays.toString(Arrays.copyOfRange(cpus, 1, cpus.length)), work, ringMsgs);
+        System.out.printf("%s %s publisher cpu %d, consumers %s, work=%d, results=%s, ringMsgs=%d%n",
+                impl, scenario, cpus[0], Arrays.toString(Arrays.copyOfRange(cpus, 1, cpus.length)), work, results, ringMsgs);
 
         // consumer threads are created before the publisher pins itself, so they never inherit its single CPU
         bench.start(new PinnedThreadFactory(Arrays.copyOfRange(cpus, 1, cpus.length)));
@@ -207,6 +211,11 @@ public final class PerfMain {
         for (Stage s : terminals) {
             if (s.checksum() != expectedSum) {
                 throw new IllegalStateException("checksum mismatch in " + s.name());
+            }
+        }
+        for (Stage s : bench.stages()) {
+            if (s.errors() != 0) {
+                throw new IllegalStateException(s.errors() + " wrong upstream results in " + s.name());
             }
         }
         System.out.println("checksums OK, messages: " + nextKey);

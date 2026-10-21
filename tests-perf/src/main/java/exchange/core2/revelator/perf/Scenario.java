@@ -11,6 +11,9 @@ public enum Scenario {
     /** P -> A -> B -> C */
     PIPELINE3(3),
 
+    /** P -> A,B,C on one thread: Revelator PipelinedFlowProcessor, Disruptor/raw one handler running A, B, C per message */
+    PIPELINE3_1T(1),
+
     /** P -> {A, B, C}, every consumer sees every message */
     MULTICAST3(3),
 
