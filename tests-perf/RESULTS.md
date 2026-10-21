@@ -69,3 +69,53 @@ cells flip between ~20 and ~120 MT/s from one session to the next.
   always catch up. Candidates: header-commit publication, batched publish, reader back-off.
 - The first raw version was slower than both frameworks: the publisher wrote a counter on every message next to the
   fields consumers read (false sharing). Fixed by moving publisher state into its own padded object.
+
+## Publication: cursor, batches, header-commit
+
+`pubmatrix.sh pub` and `pub2` (2026-10-20, one session, one run per cell). `b16` = the publisher makes messages
+visible every 16 messages and always before it waits for the schedule; `header` = commit word per message
+(Revelator rows for `header` are from `pub2`, after the placeholder store into the commit word was removed).
+Columns: p50 at 1 MT/s, p50 / p99 at 15 MT/s ("sat" = could only send that many MT/s), burst MT/s.
+
+| Scenario | Config | 1 MT/s p50 | 15 MT/s | burst |
+|---|---|---|---|---|
+| UNICAST | Revelator cursor | 0.23 | 0.35 / 0.99 | 115 |
+| | Revelator cursor b16 | 0.21 | 0.32 / 0.51 | 83 |
+| | Revelator header | 0.18 | 0.33 / 0.80 | 83 |
+| | Disruptor | 0.20 | 2.91 / 121 | 28 |
+| | Disruptor b16 | 0.24 | 0.32 / 0.53 | 92 |
+| | raw header | 0.14 | 0.25 / 0.52 | 120 |
+| PIPELINE3 | Revelator cursor | 0.48 | 0.91 / 3.25 | 117 |
+| | Revelator cursor b16 | 0.47 | 0.68 / 1.09 | 61 |
+| | Disruptor | 0.46 | 79 / 235 | 15 |
+| | Disruptor b16 | 0.50 | 0.62 / 1.52 | 48 |
+| | raw header | 0.37 | 0.56 / 1.00 | 125 |
+| MULTICAST3 | Revelator cursor | 0.26 | 573 / 4014 | 120 |
+| | Revelator cursor b16 | 0.24 | 0.45 / 0.76 | 73 |
+| | Revelator header | 0.20 | 1.05 / 4.38 | 75 |
+| | Disruptor | 0.23 | sat 9.3 | 10 |
+| | Disruptor b16 | 0.30 | 0.46 / 0.87 | 73 |
+| | raw header | 0.18 | 0.46 / 1.50 | 117 |
+| DIAMOND | Revelator cursor | 0.41 | sat 11.8 | 12 |
+| | Revelator cursor b16 | 0.37 | 0.62 / 0.96 | 56 |
+| | Revelator header | 0.33 | 40 / 179 | 79 |
+| | Disruptor | 0.38 | sat 12.2 | 13 |
+| | Disruptor b16 | 0.43 | 0.62 / 1.08 | 63 |
+| | raw header | 0.30 | 0.66 / 1.45 | 144 |
+| SHARDED4 | Revelator cursor | 0.39 | sat 8.0 | 8 |
+| | Revelator cursor b16 | 0.38 | 0.82 / 1.27 | 49 |
+| | Revelator header | 0.34 | sat 9.7 | 10 |
+| | Disruptor | 0.46 | sat 8.9 | 9 |
+| | Disruptor b16 | 0.48 | 0.85 / 1.34 | 52 |
+| | raw header | 0.29 | 1.53 / 3.60 | 117 |
+
+- Batches remove the cursor bottleneck in every implementation: SHARDED4, DIAMOND and MULTICAST3 hold 15 MT/s at
+  p99 ~1-1.3 us instead of saturating at 8-12 MT/s, and latency at low load does not change (the publisher flushes
+  before it waits). With batches Revelator and Disruptor are level on these shapes; the earlier "Disruptor collapses
+  at 10 MT/s" was this cursor effect.
+- Header-commit gives the lowest latency at low load (raw -20..-35% p50, Revelator -15..-20%) and, in raw, removes
+  the bottleneck without batches. Revelator's header-commit still saturates SHARDED4 at ~10 MT/s and DIAMOND near
+  15 MT/s - open: it parses headers during the scan and its 80-byte messages straddle cache lines; raw scans fixed
+  64-byte slots.
+- Burst throughput still depends on the regime (cursor b16 bursts are lower than cursor b1 in some shapes); use the
+  15 MT/s column to compare capacity.
