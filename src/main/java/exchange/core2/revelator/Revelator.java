@@ -18,7 +18,7 @@ public final class Revelator implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(Revelator.class);
 
-    public static final int MSG_HEADER_SIZE = 3;
+    public static final int MSG_HEADER_SIZE = 4;
     public static final byte MSG_TYPE_POISON_PILL = 31;
     public static final byte MSG_TYPE_TEST_CONTROL = 30;
 
@@ -208,6 +208,7 @@ public final class Revelator implements AutoCloseable {
         buffer[index] = msgTypeEncoded | correlationId;
         buffer[index + 1] = timestamp;
         buffer[index + 2] = claimingPayloadSize;
+        buffer[index + 3] = 0L;
 
         final long payloadStartSeq = msgStartSequence + MSG_HEADER_SIZE;
 
