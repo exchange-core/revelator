@@ -1,25 +1,35 @@
 package exchange.core2.revelator.fences;
 
-import jdk.internal.vm.annotation.Contended;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 
-public final class SingleWriterFence implements IFence {
+// 128 bytes of padding on both sides of value: the adjacent-line prefetcher pulls cache lines in pairs
+abstract class SingleWriterFenceLhsPad {
+    long p01, p02, p03, p04, p05, p06, p07, p08, p09, p10, p11, p12, p13, p14, p15, p16;
+}
+
+abstract class SingleWriterFenceValue extends SingleWriterFenceLhsPad {
+    protected volatile long value = -1;
+}
+
+abstract class SingleWriterFenceRhsPad extends SingleWriterFenceValue {
+    long p17, p18, p19, p20, p21, p22, p23, p24, p25, p26, p27, p28, p29, p30, p31, p32;
+}
+
+public final class SingleWriterFence extends SingleWriterFenceRhsPad implements IFence {
 
     private final static Logger logger = LoggerFactory.getLogger(SingleWriterFence.class);
 
-    @Contended
-    protected volatile long value = -1;
 
 
     private static final VarHandle VALUE;
 
     static {
         try {
-            VALUE = MethodHandles.lookup().findVarHandle(SingleWriterFence.class, "value", long.class);
+            VALUE = MethodHandles.lookup().findVarHandle(SingleWriterFenceValue.class, "value", long.class);
         } catch (ReflectiveOperationException e) {
             throw new ExceptionInInitializerError(e);
         }

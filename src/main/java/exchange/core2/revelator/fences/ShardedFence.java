@@ -1,7 +1,6 @@
 package exchange.core2.revelator.fences;
 
 import exchange.core2.revelator.processors.IFlowProcessor;
-import jdk.internal.vm.annotation.Contended;
 
 import java.util.Arrays;
 import java.util.List;
@@ -40,7 +39,6 @@ public final class ShardedFence {
 
     private final LongToIntFunction shardFunction;
 
-    @Contended
     private final long[] lastKnown;
 
 

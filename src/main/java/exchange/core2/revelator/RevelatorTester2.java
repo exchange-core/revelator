@@ -3,8 +3,7 @@ package exchange.core2.revelator;
 import exchange.core2.revelator.processors.ProcessorsFactories;
 import exchange.core2.revelator.utils.AffinityThreadFactory;
 import exchange.core2.revelator.utils.LatencyTesterModule;
-import jdk.internal.vm.annotation.Contended;
-import net.openhft.affinity.AffinityLock;
+import exchange.core2.collections.affinity.CpuAffinity;
 import org.HdrHistogram.SingleWriterRecorder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,9 +41,9 @@ public final class RevelatorTester2 implements LatencyTesterModule.TestingHandle
 
         hdrRecorder = latencyTesterModule.getHdrRecorder();
 
-        try (final AffinityLock lock = AffinityLock.acquireLock()) {
+        try (final CpuAffinity lock = CpuAffinity.acquireCore()) {
 
-            log.debug("Starting publisher on core: {}", lock.cpuId());
+            log.debug("Starting publisher on core: {}", lock.cpu());
 
             final int iterationsPerTestCycle = 1_000_000;
             latencyTesterModule.performTests(
@@ -152,27 +151,22 @@ public final class RevelatorTester2 implements LatencyTesterModule.TestingHandle
 
     private final Revelator revelator;
 
-    @Contended
     private Runnable lastMessageNotifier;
 
-    @Contended
     private SingleWriterRecorder hdrRecorder;
 
 
     final static int testMsgSize = 6; // can be 0
     final static int bufferSizeTest = 4 * 1024 * 1024;
 
-    @Contended
     long expectedXorData = 0L;
 
-    @Contended
     long xorData = 0L;
 
     long tailStrikesInitial;
 
     int cx = 0;
 
-    @Contended
     long startTimeNs = 0L;
 
     final static byte END_BATCH_MARKER = (byte) 7;

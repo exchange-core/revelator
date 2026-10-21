@@ -3,8 +3,7 @@ package exchange.core2.revelator;
 import exchange.core2.revelator.processors.ProcessorsFactories;
 import exchange.core2.revelator.utils.AffinityThreadFactory;
 import exchange.core2.revelator.utils.LatencyTools;
-import jdk.internal.vm.annotation.Contended;
-import net.openhft.affinity.AffinityLock;
+import exchange.core2.collections.affinity.CpuAffinity;
 import org.HdrHistogram.Histogram;
 import org.HdrHistogram.SingleWriterRecorder;
 import org.slf4j.Logger;
@@ -33,11 +32,11 @@ public final class RevelatorTester {
                 atf);
 
 
-        try (final AffinityLock lock = AffinityLock.acquireCore()) {
+        try (final CpuAffinity lock = CpuAffinity.acquireCore()) {
 
             r.start();
 
-            log.debug("Starting publisher on core: {}", lock.cpuId());
+            log.debug("Starting publisher on core: {}", lock.cpu());
 
             final int indexMask = r.getIndexMask();
 
@@ -197,7 +196,6 @@ public final class RevelatorTester {
     final static int bufferSizeTest = 4 * 1024 * 1024;
     final static SingleWriterRecorder hdrRecorder = new SingleWriterRecorder(Integer.MAX_VALUE, 2);
 
-    @Contended
     static long xorData = 0L;
     static int processedMessages = 0;
 
@@ -209,7 +207,6 @@ public final class RevelatorTester {
 
     static double avgBatch = 1;
 
-    @Contended
     static int cx = 0;
 
 

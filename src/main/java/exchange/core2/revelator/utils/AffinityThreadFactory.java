@@ -1,6 +1,6 @@
 package exchange.core2.revelator.utils;
 
-import net.openhft.affinity.AffinityLock;
+import exchange.core2.collections.affinity.CpuAffinity;
 import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,23 +35,22 @@ public final class AffinityThreadFactory implements ThreadFactory {
 
     private void executePinned(@NotNull Runnable runnable) {
 
-        try (final AffinityLock lock = getAffinityLockSync()) {
+        try (final CpuAffinity lock = getAffinityLockSync()) {
 
             final Thread thread = Thread.currentThread();
 
-            final String newName = String.format("%s-cpu%d", thread.getName(), lock.cpuId());
+            final String newName = String.format("%s-cpu%d", thread.getName(), lock.cpu());
             thread.setName(newName);
 
-            log.debug("{} will be running on thread={} pinned to cpu {} ({})", runnable, newName, lock.cpuId(), threadAffinityMode);
+            log.debug("{} will be running on thread={} pinned to cpu {} ({})", runnable, newName, lock.cpu(), threadAffinityMode);
 
             runnable.run();
         }
     }
 
-    private synchronized AffinityLock getAffinityLockSync() {
-        return threadAffinityMode == ThreadAffinityMode.AFFINITY_PHYSICAL_CORE
-                ? AffinityLock.acquireCore()
-                : AffinityLock.acquireLock();
+    // CpuAffinity always reserves the whole physical core, so both modes behave the same
+    private synchronized CpuAffinity getAffinityLockSync() {
+        return CpuAffinity.acquireCore();
     }
 
     public enum ThreadAffinityMode {
