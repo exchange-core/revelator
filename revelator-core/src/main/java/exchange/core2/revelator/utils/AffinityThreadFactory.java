@@ -1,7 +1,7 @@
 package exchange.core2.revelator.utils;
 
 import exchange.core2.collections.affinity.CpuAffinity;
-import org.jetbrains.annotations.NotNull;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -21,7 +21,7 @@ public final class AffinityThreadFactory implements ThreadFactory {
     }
 
     @Override
-    public synchronized Thread newThread(@NotNull Runnable runnable) {
+    public synchronized Thread newThread(Runnable runnable) {
 
         // log.info("---- Requesting thread for {}", runnable);
 
@@ -33,7 +33,7 @@ public final class AffinityThreadFactory implements ThreadFactory {
 
     }
 
-    private void executePinned(@NotNull Runnable runnable) {
+    private void executePinned(Runnable runnable) {
 
         try (final CpuAffinity lock = getAffinityLockSync()) {
 

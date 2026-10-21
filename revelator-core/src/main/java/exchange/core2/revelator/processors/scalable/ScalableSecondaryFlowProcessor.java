@@ -6,8 +6,6 @@ import exchange.core2.revelator.fences.IFence;
 import exchange.core2.revelator.fences.SingleWriterFence;
 import exchange.core2.revelator.processors.IFlowProcessor;
 import exchange.core2.revelator.processors.simple.SimpleMessageHandler;
-import org.eclipse.collections.api.tuple.primitive.LongLongPair;
-import org.eclipse.collections.impl.tuple.primitive.PrimitiveTuples;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -27,7 +25,7 @@ public final class ScalableSecondaryFlowProcessor implements IFlowProcessor {
     private final long[] buffer;
     private final int bufferSize;
 
-    private final BlockingQueue<LongLongPair> tasks = new ArrayBlockingQueue<>(32);
+    private final BlockingQueue<Range> tasks = new ArrayBlockingQueue<>(32);
 
 
     public ScalableSecondaryFlowProcessor(final SimpleMessageHandler handler,
@@ -44,10 +42,10 @@ public final class ScalableSecondaryFlowProcessor implements IFlowProcessor {
         try {
             while (true) {
 
-                final LongLongPair task = tasks.take();
+                final Range task = tasks.take();
 
-                long positionSeq = task.getOne();
-                final long availableSeq = task.getTwo();
+                long positionSeq = task.from();
+                final long availableSeq = task.to();
 
                 while (positionSeq < availableSeq) {
 
@@ -103,7 +101,7 @@ public final class ScalableSecondaryFlowProcessor implements IFlowProcessor {
 
     public void processRange(long offsetFrom, long offsetTo) {
         try {
-            tasks.put(PrimitiveTuples.pair(offsetFrom, offsetTo));
+            tasks.put(new Range(offsetFrom, offsetTo));
         } catch (InterruptedException ex) {
             throw new RuntimeException(ex);
         }
@@ -116,5 +114,8 @@ public final class ScalableSecondaryFlowProcessor implements IFlowProcessor {
     @Override
     public String toString() {
         return "ScalableFlowProcessor{" + handler + '}';
+    }
+
+    private record Range(long from, long to) {
     }
 }

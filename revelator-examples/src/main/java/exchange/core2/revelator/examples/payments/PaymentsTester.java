@@ -13,7 +13,7 @@ import org.apache.commons.lang3.mutable.MutableInt;
 import org.apache.commons.lang3.mutable.MutableLong;
 import org.eclipse.collections.impl.map.mutable.primitive.IntLongHashMap;
 import org.eclipse.collections.impl.map.mutable.primitive.LongLongHashMap;
-import org.jetbrains.annotations.NotNull;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -263,7 +263,7 @@ public final class PaymentsTester {
 
     }
 
-    @NotNull
+    
     private Map<Short, PaymentsApi.FeeConfig> prepareFeeLimits(final Map<Integer, Double> currencyRates) {
 
         return currencyRates.entrySet().stream()
