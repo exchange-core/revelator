@@ -44,7 +44,11 @@ public final class Revelator implements AutoCloseable {
 
     private long tailStrike = 0L;
 
-    private long committedPosition = 0L; // HEADER_COMMIT: messages before it have their commit word written
+    // HEADER_COMMIT: start positions of claimed, not yet published messages
+    private static final int PENDING_MAX = 1024; // claims without publish beyond this publish the oldest
+    private final long[] pendingStarts = new long[PENDING_MAX];
+    private long pendingHead = 0L;
+    private long pendingTail = 0L;
 
     /**
      * How readers learn that a message is complete.
@@ -171,81 +175,68 @@ public final class Revelator implements AutoCloseable {
     }
 
     /**
-     * Claim space for single message
+     * Claims space for one message and writes its header.
+     * The hot path is kept small so that it inlines into the publisher's loop; padding, waiting for space and
+     * argument errors are out of line.
      *
-     * @param claimingPayloadSize
-     * @return offset to write message body
+     * @return position of the payload
      */
     public long claimSingleMessage(final int claimingPayloadSize,
                                    final long timestamp,
                                    final long correlationId,
                                    final byte messageType) {
 
-        if (messageType < 1 || messageType > MSG_TYPE_POISON_PILL) {
-            throw new IllegalArgumentException("message type should be in range: 1.." + MSG_TYPE_POISON_PILL);
-        }
-
-        if ((correlationId >> 56) != 0) {
-            throw new IllegalArgumentException("correlationId should be in range: 0..2^56-1");
-        }
-
-        // calculate expected message size
         final int fullMessageSize = claimingPayloadSize + MSG_HEADER_SIZE;
-
-        if (claimingPayloadSize < 0 || fullMessageSize > bufferSize) {
-            throw new IllegalArgumentException("claimed size must be >= 0 and < bufferSize");
+        if (messageType < 1 || messageType > MSG_TYPE_POISON_PILL || (correlationId >>> 56) != 0
+                || claimingPayloadSize < 0 || fullMessageSize > bufferSize) {
+            throw invalidClaim(claimingPayloadSize, correlationId, messageType);
         }
 
-        long msgStartSequence = reservedPosition;
-        this.reservedPosition += fullMessageSize;
-        final long wrapPoint = this.reservedPosition - bufferSize;
-
-        // check if new message can fit into remaining buffer
-        int index = (int) (msgStartSequence & indexMask);
-        final long remainingSpaceBytes = bufferSize - index;
-        if (remainingSpaceBytes < fullMessageSize) {
-            // can not fit - write empty message that will be ignored by headers
-
-//            log.debug("Can not fit message because msgStartSequence&mask={} fullMessageSize={} bufferSize={} : SKIP remainingSpaceBytes={}",
-//                    index, fullMessageSize, bufferSize, remainingSpaceBytes);
-
-            // write 0 message, indicating that reader should start from buffer
-            // there is always at least 8 bytes available due to alignment (only need to check wrap point before writing)
-            // so we check wrap point for claimed message (just to do it once)
-            wrapPointCheckWaitUpdate(msgStartSequence, wrapPoint + remainingSpaceBytes);
-            buffer[index] = 0L;
-
+        long msgStart = reservedPosition;
+        int index = (int) (msgStart & indexMask);
+        if (bufferSize - index < fullMessageSize) {
+            msgStart = padToNextLap(msgStart, index, fullMessageSize);
             index = 0;
-            msgStartSequence += remainingSpaceBytes;
-            this.reservedPosition += remainingSpaceBytes;
         } else {
-
-//        log.debug("msgStartSequence={} new reservedPosition={} wrapPoint={}",
-//                msgStartSequence, reservedPosition, wrapPoint);
-
-            wrapPointCheckWaitUpdate(msgStartSequence, wrapPoint);
+            final long wrapPoint = msgStart + fullMessageSize - bufferSize;
+            if (wrapPoint > cachedOutboundPosition) {
+                wrapPointCheckWaitUpdate(msgStart, wrapPoint);
+            }
         }
+        reservedPosition = msgStart + fullMessageSize;
 
-//        log.debug("WRITING HEADER correlationId={}", correlationId);
-
-        // write header
-
-        final long msgTypeEncoded = ((long) messageType) << 56;
-
-        // TODO put UserCookie (4bytes), size (2bytes - 512K max msg size)
-
-        buffer[index] = msgTypeEncoded | correlationId;
+        buffer[index] = (((long) messageType) << 56) | correlationId;
         buffer[index + 1] = timestamp;
         buffer[index + 2] = claimingPayloadSize;
-        // buffer[index + 3]: commit word, written by publish() in HEADER_COMMIT mode, unused with CURSOR;
-        // no placeholder write here - a second store to that line would cost a second ownership transfer
+        // buffer[index + 3] is the commit word in HEADER_COMMIT mode, unused with CURSOR
+        if (publicationMode == PublicationMode.HEADER_COMMIT) {
+            addPending(msgStart);
+        }
+        return msgStart + MSG_HEADER_SIZE;
+    }
 
-        final long payloadStartSeq = msgStartSequence + MSG_HEADER_SIZE;
+    // the message does not fit before the end of the ring: pad the rest of the lap, continue from the next lap
+    private long padToNextLap(final long msgStart, final int index, final int fullMessageSize) {
+        final long remaining = bufferSize - index;
+        wrapPointCheckWaitUpdate(msgStart, msgStart + remaining + fullMessageSize - bufferSize);
+        buffer[index] = 0L;
+        if (publicationMode == PublicationMode.HEADER_COMMIT && remaining >= MSG_HEADER_SIZE) {
+            // padding has no payload: commit it now, readers cannot reach it before the messages ahead of it
+            HeaderCommitFence.commit(buffer, index, msgStart);
+        }
+        return msgStart + remaining;
+    }
 
-//        log.debug("WRITING HEADER DONE payloadStartSeq={} index={} claimingPayloadSize={}",
-//                payloadStartSeq, payloadStartSeq & indexMask, claimingPayloadSize);
+    private void addPending(final long msgStart) {
+        if (pendingTail - pendingHead == PENDING_MAX) {
+            commitUpTo(msgStart);
+        }
+        pendingStarts[(int) (pendingTail++ & (PENDING_MAX - 1))] = msgStart;
+    }
 
-        return payloadStartSeq;
+    private static IllegalArgumentException invalidClaim(int payloadSize, long correlationId, byte messageType) {
+        return new IllegalArgumentException("invalid claim: messageType=" + messageType + " (1.." + MSG_TYPE_POISON_PILL
+                + "), correlationId=" + correlationId + " (0..2^56-1), payloadSize=" + payloadSize);
     }
 
     private void wrapPointCheckWaitUpdate(long msgStartSequence, long wrapPoint) {
@@ -318,23 +309,21 @@ public final class Revelator implements AutoCloseable {
         }
     }
 
-    // walks the publisher's own headers (still in its cache) and writes commit words in order
+    // Commits the pending messages that start before end, last one first. A reader that sees the commit word of the first
+    // message also sees everything written before it - the other commit words of the batch - and goes through the
+    // batch without waiting; in forward order it would chase the publisher message by message, reading each line while
+    // the publisher still has to write to it.
     private void commitUpTo(final long end) {
-        long pos = committedPosition;
-        while (pos < end) {
-            final int index = (int) (pos & indexMask);
-            if (bufferSize - index < MSG_HEADER_SIZE) {
-                pos = (pos | indexMask) + 1; // implicit padding, no header fits
-            } else if (buffer[index] == 0L) {
-                HeaderCommitFence.commit(buffer, index, pos); // padding header
-                pos = (pos | indexMask) + 1;
-            } else {
-                final long next = pos + MSG_HEADER_SIZE + buffer[index + 2];
-                HeaderCommitFence.commit(buffer, index, pos);
-                pos = next;
-            }
+        final long[] starts = pendingStarts;
+        long upTo = pendingHead;
+        while (upTo != pendingTail && starts[(int) (upTo & (PENDING_MAX - 1))] < end) {
+            upTo++;
         }
-        committedPosition = pos;
+        for (long i = upTo - 1; i >= pendingHead; i--) {
+            final long start = starts[(int) (i & (PENDING_MAX - 1))];
+            HeaderCommitFence.commit(buffer, (int) (start & indexMask), start);
+        }
+        pendingHead = upTo;
     }
 
 

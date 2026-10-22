@@ -2,6 +2,7 @@ package exchange.core2.revelator.processors.simple;
 
 import exchange.core2.revelator.Revelator;
 import exchange.core2.revelator.RevelatorConfig;
+import exchange.core2.revelator.fences.HeaderCommitFence;
 import exchange.core2.revelator.fences.IFence;
 import exchange.core2.revelator.fences.SingleWriterFence;
 import exchange.core2.revelator.processors.IFlowProcessor;
@@ -25,6 +26,9 @@ public final class SimpleFlowProcessor implements IFlowProcessor {
     // after processing all of it, so publisher and consumer took turns instead of running in parallel
     private static final int RELEASE_EVERY = Integer.getInteger("revelator.releaseEvery", 4096);
 
+    // header-commit loop: progress is published at least this often (messages), as often as HeaderCommitFence scans
+    private static final int HEADER_RELEASE_EVERY = 64;
+
     private long superCounter;
 
     public SimpleFlowProcessor(final SimpleMessageHandler handler,
@@ -40,6 +44,11 @@ public final class SimpleFlowProcessor implements IFlowProcessor {
 
     @Override
     public void run() {
+
+        if (inboundFence instanceof HeaderCommitFence) {
+            runHeaderCommit();
+            return;
+        }
 
         long positionSeq = 0L;
         long releasedSeq = 0L;
@@ -155,6 +164,79 @@ public final class SimpleFlowProcessor implements IFlowProcessor {
             releasedSeq = availableSeq;
         }
 
+    }
+
+    /**
+     * Reads the producer's messages in one pass: checks the commit word of the next message and handles it right away
+     * (scanning commit words ahead and then reading the same headers again cost a second pass over every message).
+     * Progress is published when no committed message follows, and at least every HEADER_RELEASE_EVERY messages.
+     */
+    private void runHeaderCommit() {
+
+        long positionSeq = 0L;
+        long releasedSeq = 0L;
+        int unreleased = 0;
+
+        while (true) {
+
+            final int index = (int) (positionSeq & indexMask);
+
+            if (bufferSize - index < Revelator.MSG_HEADER_SIZE) {
+                // implicit padding: no header fits before the end of the ring
+                positionSeq = (positionSeq | indexMask) + 1;
+                continue;
+            }
+
+            if (!HeaderCommitFence.isCommitted(buffer, index, positionSeq)) {
+                if (positionSeq != releasedSeq) {
+                    releasingFence.setRelease(positionSeq);
+                    releasedSeq = positionSeq;
+                    unreleased = 0;
+                }
+                Thread.onSpinWait();
+                continue;
+            }
+
+            final long header1 = buffer[index];
+
+            if (header1 == 0L) {
+                // padding header: skip to the next lap
+                positionSeq = (positionSeq | indexMask) + 1;
+                continue;
+            }
+
+            final long correlationId = header1 & 0x00FF_FFFF_FFFF_FFFFL;
+            final byte msgType = (byte) ((int) (header1 >>> 56) & 0x1F);
+
+            if (msgType == Revelator.MSG_TYPE_POISON_PILL) {
+                log.debug("processor shutdown (received msgType={}, publishing positionSeq={}+{})", msgType, positionSeq, Revelator.MSG_HEADER_SIZE);
+                releasingFence.setRelease(positionSeq + Revelator.MSG_HEADER_SIZE);
+                handler.onShutdown();
+                return;
+            }
+
+            final long timestamp = buffer[index + 1];
+            final int payloadSize = (int) buffer[index + 2];
+            final int indexMsg = index + Revelator.MSG_HEADER_SIZE;
+            if (indexMsg + payloadSize > bufferSize) {
+                throw new IllegalStateException("Failed to decode message: payloadSize=" + payloadSize
+                        + " correlationId=" + correlationId + " at " + positionSeq);
+            }
+
+            try {
+                handler.handleMessage(buffer, indexMsg, payloadSize, timestamp, positionSeq, correlationId, msgType);
+            } catch (final Exception ex) {
+                log.debug("Exception when processing message", ex);
+            }
+
+            positionSeq += Revelator.MSG_HEADER_SIZE + payloadSize;
+
+            if (++unreleased == HEADER_RELEASE_EVERY) {
+                releasingFence.setRelease(positionSeq);
+                releasedSeq = positionSeq;
+                unreleased = 0;
+            }
+        }
     }
 
     public SingleWriterFence getReleasingFence() {

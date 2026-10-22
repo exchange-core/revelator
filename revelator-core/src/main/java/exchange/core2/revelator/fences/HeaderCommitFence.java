@@ -42,6 +42,13 @@ public final class HeaderCommitFence implements IFence {
     }
 
     /**
+     * Acquire-reads the commit word of the message (or padding header) that starts at the position.
+     */
+    public static boolean isCommitted(final long[] buffer, final int index, final long position) {
+        return (long) LONGS.getAcquire(buffer, index + COMMIT_OFFSET) == ((position + 1) ^ COMMIT_MAGIC);
+    }
+
+    /**
      * @return end of the committed messages that follow lastKnown (lastKnown if the next one is not committed yet)
      */
     @Override
