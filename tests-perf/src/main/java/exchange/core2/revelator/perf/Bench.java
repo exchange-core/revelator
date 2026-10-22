@@ -21,6 +21,13 @@ public interface Bench {
     List<Stage> stages();
 
     static List<Stage> createStages(Scenario scenario, int work) {
+        // -Dperf.slowShard=i -Dperf.slowWork=n: SHARDED4 shard i does n multiply-adds per message instead of work
+        final int slowShard = Integer.getInteger("perf.slowShard", -1);
+        final int slowWork = Integer.getInteger("perf.slowWork", work);
+        final int[] shardWork = new int[Scenario.SHARDS];
+        for (int i = 0; i < shardWork.length; i++) {
+            shardWork[i] = i == slowShard ? slowWork : work;
+        }
         return switch (scenario) {
             case UNICAST -> List.of(
                     new Stage("A", 0, -1, 1, work, true));
@@ -28,15 +35,17 @@ public interface Bench {
                     new Stage("A", 0, -1, 1, work, false),
                     new Stage("B", 1, -1, 1, work, false),
                     new Stage("C", 2, -1, 1, work, true));
+            case MULTICAST -> java.util.stream.IntStream.range(0, Scenario.readers())
+                    .mapToObj(i -> new Stage("R" + i, i, -1, 1, work, true)).toList();
             case MULTICAST3 -> List.of(
                     new Stage("A", 0, -1, 1, work, true),
                     new Stage("B", 1, -1, 1, work, true),
                     new Stage("C", 2, -1, 1, work, true));
             case SHARDED4 -> List.of(
-                    new Stage("S0", 0, 0, Scenario.SHARDS, work, false),
-                    new Stage("S1", 1, 1, Scenario.SHARDS, work, false),
-                    new Stage("S2", 2, 2, Scenario.SHARDS, work, false),
-                    new Stage("S3", 3, 3, Scenario.SHARDS, work, false),
+                    new Stage("S0", 0, 0, Scenario.SHARDS, shardWork[0], false),
+                    new Stage("S1", 1, 1, Scenario.SHARDS, shardWork[1], false),
+                    new Stage("S2", 2, 2, Scenario.SHARDS, shardWork[2], false),
+                    new Stage("S3", 3, 3, Scenario.SHARDS, shardWork[3], false),
                     new Stage("J", 4, -1, 1, work, true));
         };
     }

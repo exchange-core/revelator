@@ -55,7 +55,7 @@ public final class RevelatorBench implements Bench {
         return switch (scenario) {
             case UNICAST -> ProcessorsFactories.single(h.get(0));
             case PIPELINE3 -> ProcessorsFactories.chain(h);
-            case MULTICAST3 -> ProcessorsFactories.parallel(h);
+            case MULTICAST3, MULTICAST -> ProcessorsFactories.parallel(h);
             case PIPELINE3_1T -> (inbound, config) -> {
                 final List<PipelinedStageHandler<PipelinedFlowSession>> pipelined = stages.stream()
                         .map(s -> (PipelinedStageHandler<PipelinedFlowSession>) new PipelinedStage(s, config.getBuffer()))

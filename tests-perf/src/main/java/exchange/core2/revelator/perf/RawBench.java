@@ -75,6 +75,12 @@ public final class RawBench implements Bench {
                 runners.add(new FusedRunner());
                 gating = new Cursor[]{progress[2]};
             }
+            case MULTICAST -> {
+                for (int i = 0; i < stages.size(); i++) {
+                    runners.add(runner(i, source));
+                }
+                gating = progress.clone();
+            }
             case MULTICAST3 -> {
                 runners.add(runner(0, source));
                 runners.add(runner(1, source));

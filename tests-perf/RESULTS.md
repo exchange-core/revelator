@@ -50,7 +50,14 @@ cells flip between ~20 and ~120 MT/s from one session to the next.
 | PIPELINE3, results | 51 | 90 | 111 |
 | DIAMOND, results | 58 | 86 | 96 |
 | MULTICAST3, results | 81 | 118 | 141 |
-| PIPELINE3, work=40 | 72 | 72 | 86 |
+| PIPELINE3, work=40 (see note) | 72 | 72 | 86 |
+
+Note: at that time `perf.work` was an LCG loop that the JIT folded (1000 steps cost ~30 ns), so the work=40 row ran
+practically without stage work; its difference from the plain row is the regime variation described below, not
+the effect of work. Stage work is now xorshift rounds, ~1.4 ns each.
+
+The SHARDED4 latency rows above sampled only shard 0 messages (key % 16 == 0 implies key % 4 == 0). Shards are
+symmetric there, so the numbers stand; the sampling now uses a key hash.
 
 ## Findings
 
@@ -63,7 +70,7 @@ cells flip between ~20 and ~120 MT/s from one session to the next.
   indexed by message offset, one result per ~80 bytes, which costs throughput.
 - PipelinedFlowProcessor (PIPELINE3_1T) tops out at ~22 MT/s while a fused handler does ~100; its latency matches.
   Fusing three cheap stages on one thread halves latency against three threads (0.21 vs 0.43 us).
-- More work per stage can raise throughput (results mode, `perf.work=40`): when consumers are as fast as the
+- More work per stage can raise throughput (results mode): when consumers are as fast as the
   publisher they spin on its cursor, which it writes for every message, and each publish then has to take the line
   back from all spinning readers. SHARDED4 stays at ~8-10 MT/s even with work because shards skip 3 of 4 messages and
   always catch up. Candidates: header-commit publication, batched publish, reader back-off.

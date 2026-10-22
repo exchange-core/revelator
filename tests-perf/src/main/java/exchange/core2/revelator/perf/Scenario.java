@@ -21,13 +21,24 @@ public enum Scenario {
     DIAMOND(3),
 
     /** P -> {S0..S3}, shard i handles keys with key % 4 == i, then J joins: J waits for the shard of each message */
-    SHARDED4(5);
+    SHARDED4(5),
+
+    /** P -> N consumers that all see every message, N = -Dperf.readers (1..5, default 3) */
+    MULTICAST(-1);
 
     public static final int SHARDS = 4;
 
-    public final int threads;
+    private final int threads;
 
     Scenario(int threads) {
         this.threads = threads;
+    }
+
+    public int threads() {
+        return threads > 0 ? threads : readers();
+    }
+
+    static int readers() {
+        return Integer.getInteger("perf.readers", 3);
     }
 }

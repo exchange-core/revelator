@@ -16,6 +16,7 @@ abstract class StageFields extends StageLhsPad {
     long sink;
     long errors;    // upstream results that did not match
     long processed; // read by the producer thread to detect completion
+    int sampleCount;
 }
 
 abstract class StageRhsPad extends StageFields {
@@ -28,8 +29,11 @@ abstract class StageRhsPad extends StageFields {
  */
 public final class Stage extends StageRhsPad {
 
-    // every 16th message (by key) records its end-to-end latency
-    static final long SAMPLE_MASK = 15;
+    // one message in 16 records its end-to-end latency, chosen by a key hash: key % 16 == 0 would only ever pick
+    // messages of SHARDED4 shard 0
+    static boolean sampled(long key) {
+        return (key * 0x9E37_79B9_7F4A_7C15L) >>> 60 == 0;
+    }
 
     private static final VarHandle PROCESSED;
 
@@ -47,6 +51,7 @@ public final class Stage extends StageRhsPad {
     private final long shardMask;
     private final int work;       // extra dependent multiply-adds per message
     private final SingleWriterRecorder recorder; // null unless the stage ends the scenario
+    private final long[] samples;                 // raw latency samples for charts (-Dperf.samples), or null
 
     Stage(String name, int id, int shard, int shards, int work, boolean terminal) {
         this.name = name;
@@ -55,6 +60,9 @@ public final class Stage extends StageRhsPad {
         this.shardMask = shards - 1;
         this.work = work;
         this.recorder = terminal ? new SingleWriterRecorder(60_000_000_000L, 2) : null;
+        this.samples = terminal && System.getProperty("perf.samples") != null
+                ? new long[Integer.getInteger("perf.samplesMax", 1_000_000)]
+                : null;
     }
 
     boolean accepts(final long key) {
@@ -67,14 +75,21 @@ public final class Stage extends StageRhsPad {
     long process(final long timestamp, final long key, final long payloadSum) {
         checksum += payloadSum;
         if (work > 0) {
-            long x = payloadSum;
+            // xorshift rounds: a dependent chain the JIT cannot fold (an LCG loop of 1000 steps cost ~30 ns)
+            long x = payloadSum | 1;
             for (int i = 0; i < work; i++) {
-                x = x * 6364136223846793005L + 1442695040888963407L;
+                x ^= x << 13;
+                x ^= x >>> 7;
+                x ^= x << 17;
             }
             sink ^= x;
         }
-        if (recorder != null && (key & SAMPLE_MASK) == 0) {
-            recorder.recordValue(Math.max(0L, System.nanoTime() - timestamp));
+        if (recorder != null && sampled(key)) {
+            final long latency = Math.max(0L, System.nanoTime() - timestamp);
+            recorder.recordValue(latency);
+            if (samples != null && sampleCount < samples.length) {
+                samples[sampleCount++] = latency;
+            }
         }
         PROCESSED.setRelease(this, processed + 1);
         return resultOf(id, payloadSum);
@@ -115,6 +130,19 @@ public final class Stage extends StageRhsPad {
 
     Histogram intervalHistogram() {
         return recorder.getIntervalHistogram();
+    }
+
+    /**
+     * Samples recorded since the last call (call only while the stage is idle; the next publication makes the reset
+     * visible to the stage thread).
+     */
+    long[] takeSamples() {
+        if (samples == null) {
+            return new long[0];
+        }
+        final long[] copy = java.util.Arrays.copyOf(samples, sampleCount);
+        sampleCount = 0;
+        return copy;
     }
 
     String name() {

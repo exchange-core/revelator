@@ -48,6 +48,7 @@ public final class DisruptorBench implements Bench {
                 case UNICAST -> disruptor.handleEventsWith(f.get(0));
                 case PIPELINE3 -> disruptor.handleEventsWith(f.get(0)).then(f.get(1)).then(f.get(2));
                 case MULTICAST3 -> disruptor.handleEventsWith(f.get(0), f.get(1), f.get(2));
+                case MULTICAST -> disruptor.handleEventsWith(f.toArray(EventProcessorFactory[]::new));
                 case DIAMOND -> disruptor.handleEventsWith(f.get(0), f.get(1)).then(f.get(2));
                 // the join can only wait for the minimum over all shards
                 case SHARDED4 -> disruptor.handleEventsWith(f.get(0), f.get(1), f.get(2), f.get(3)).then(f.get(4));
