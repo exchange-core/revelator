@@ -126,3 +126,30 @@ Columns: p50 at 1 MT/s, p50 / p99 at 15 MT/s ("sat" = could only send that many 
   64-byte slots.
 - Burst throughput still depends on the regime (cursor b16 bursts are lower than cursor b1 in some shapes); use the
   15 MT/s column to compare capacity.
+
+## Header-commit on SHARDED4 (2026-10-22)
+
+`ab_hdr.sh`: capacity = highest load from a 4..30 MT/s sweep with p99 <= 10 us and the publisher keeping up.
+
+| Variant | Capacity, MT/s (p99 there) | Burst, MT/s |
+|---|---|---|
+| before: header, batch 1 | 8-10 | 10 |
+| before: header, batch 16 (forward commit) | 16 (3.1 us) | 19.6 |
+| header, batch 1 | 8-10 | 10-14 |
+| header, batch 4 (reverse commit) | 14 (2.1 us) | 22.8 |
+| header, batch 16 (reverse commit) | 24 (3.0 us) | 35 |
+| cursor, batch 16 | >= 30 (1.9 us) | 50 |
+| raw header, batch 1 | 22 (9.0 us) | 114 |
+
+What was found on the way (perf counters per message at a fixed rate):
+- The publisher was the bottleneck: `claimSingleMessage` did not inline (argument errors with string building,
+  padding and waits in one method) - 216 instructions and 38 stores per message. The hot path is now small.
+- With batches the readers chased the publisher through the batch: commit words written in order, each reader moved
+  to the next message while its line was still being written. Commits now go last message first; a reader that sees
+  the first commit sees the whole batch.
+- Deferring the header to publish (so it is written next to the commit word) did not help (8-10 vs 10-12 MT/s with
+  the header written at claim) and was dropped.
+- Still open, batch 1: the commit word sits in the header and the payload starts in the same cache line, so readers
+  waiting for the commit hold that line while the payload is written - two ownership transfers per message where
+  raw (commit word last in the slot) needs one. Fix would be frames aligned so that the header ends a cache line
+  and the payload starts the next one (costs padding).
