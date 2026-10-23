@@ -112,6 +112,13 @@ public final class Stage extends StageRhsPad {
         return errors;
     }
 
+    /**
+     * Counts a violation found by a handler (e.g. a key bucket seen out of order).
+     */
+    void error() {
+        errors++;
+    }
+
     int id() {
         return id;
     }

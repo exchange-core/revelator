@@ -10,6 +10,8 @@ import exchange.core2.revelator.processors.ProcessorsFactories;
 import exchange.core2.revelator.processors.pipelined.PipelinedFlowProcessor;
 import exchange.core2.revelator.processors.pipelined.PipelinedFlowSession;
 import exchange.core2.revelator.processors.pipelined.PipelinedStageHandler;
+import exchange.core2.revelator.processors.reordering.ReorderingFlowProcessor;
+import exchange.core2.revelator.processors.reordering.ReorderingMessageHandler;
 import exchange.core2.revelator.processors.simple.SimpleFlowProcessor;
 import exchange.core2.revelator.processors.simple.SimpleMessageHandler;
 
@@ -84,8 +86,11 @@ public final class RevelatorBench implements Bench {
                     processors.add(shard);
                     shardFences[i] = shard.getReleasingFence();
                 }
-                // the join reads the producer's fence and then waits only for the shard owning each message
-                final SimpleFlowProcessor join = new SimpleFlowProcessor(
+                // the join reads the producer's fence and then waits only for the shard owning each message;
+                // -Dperf.bypass: messages of other shards go ahead of one whose shard is behind (per key order kept)
+                final IFlowProcessor join = Boolean.getBoolean("perf.bypass")
+                        ? new ReorderingFlowProcessor(new BypassJoinHandler(stages.get(Scenario.SHARDS), shardFences), inbound, config, 64)
+                        : new SimpleFlowProcessor(
                         new ShardJoinHandler(stages.get(Scenario.SHARDS), shardFences, results ? columns : null), inbound, config);
                 processors.add(join);
                 final List<IFence> all = new ArrayList<>(List.of(shardFences));
@@ -188,6 +193,66 @@ public final class RevelatorBench implements Bench {
                 stage.verify(shard, sum, column[(int) globalOffset & (column.length - 1)]);
             }
             stage.process(timestamp, key, sum);
+        }
+    }
+
+    /**
+     * SHARDED4 join for ReorderingFlowProcessor: not ready while the owner shard is behind. Messages are ordered by
+     * a 64-bucket key hash; the handler checks that keys of each bucket arrive in increasing order.
+     */
+    private static final class BypassJoinHandler implements ReorderingMessageHandler {
+
+        private final Stage stage;
+        private final IFence[] shardFences;
+        private final long[] knownProgress;
+        private final long shardMask;
+        private final long[] lastKeyInBucket = new long[64];
+
+        BypassJoinHandler(Stage stage, IFence[] shardFences) {
+            this.stage = stage;
+            this.shardFences = shardFences;
+            this.knownProgress = new long[shardFences.length];
+            this.shardMask = shardFences.length - 1;
+            java.util.Arrays.fill(lastKeyInBucket, -1L);
+        }
+
+        private static int bucket(long key) {
+            return (int) ((key * 0x9E37_79B9_7F4A_7C15L) >>> 58);
+        }
+
+        // control for the order check: -Dperf.bypassNoOrder lets any message go ahead of any other
+        private static final boolean NO_ORDER = Boolean.getBoolean("perf.bypassNoOrder");
+
+        @Override
+        public long signature(long[] buffer, int index, int msgSize, byte msgType) {
+            if (msgType != MSG_TYPE) {
+                return -1L;
+            }
+            return NO_ORDER ? 0L : 1L << bucket(buffer[index]);
+        }
+
+        @Override
+        public boolean tryHandle(long[] buffer, int index, int msgSize, long timestamp, long globalOffset, long correlationId, byte msgType) {
+            if (msgType != MSG_TYPE) {
+                return true;
+            }
+            final long key = buffer[index];
+            final int shard = (int) (key & shardMask);
+            final long messageEnd = globalOffset + Revelator.MSG_HEADER_SIZE + msgSize;
+            if (knownProgress[shard] < messageEnd) {
+                final long progress = shardFences[shard].getAcquire(0L);
+                if (progress < messageEnd) {
+                    return false;
+                }
+                knownProgress[shard] = progress;
+            }
+            final int bucket = bucket(key);
+            if (key <= lastKeyInBucket[bucket]) {
+                stage.error(); // two messages of one bucket handled out of order
+            }
+            lastKeyInBucket[bucket] = key;
+            stage.process(timestamp, key, payloadSum(buffer, index));
+            return true;
         }
     }
 

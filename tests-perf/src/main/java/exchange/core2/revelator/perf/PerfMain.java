@@ -41,7 +41,9 @@ import java.util.Locale;
  * perf.out       CSV file to append results to, perf.label - run label for it
  * perf.samples   directory for raw latency samples of each latency step: &lt;dir&gt;/&lt;scenario&gt;-&lt;rate&gt;MTs/&lt;perf.series&gt;.csv,
  *                column latency_ps (exchange-charts format); perf.series defaults to perf.impl
- * perf.slowShard, perf.slowWork  SHARDED4: shard i does slowWork multiply-adds per message
+ * perf.slowShard, perf.slowWork  SHARDED4: shard i does slowWork xorshift rounds per message
+ * perf.bypass    SHARDED4, Revelator: the join (ReorderingFlowProcessor) lets messages of ready shards go ahead of
+ *                one whose shard is behind, keeping the order within each of 64 key buckets
  * </pre>
  * Latency is open-loop: message j is due at t0 + j/rate and carries that due time, so a publisher falling behind
  * shows up as latency instead of being hidden (no coordinated omission).
@@ -294,7 +296,7 @@ public final class PerfMain {
         }
         for (Stage s : bench.stages()) {
             if (s.errors() != 0) {
-                throw new IllegalStateException(s.errors() + " wrong upstream results in " + s.name());
+                throw new IllegalStateException(s.errors() + " errors (wrong upstream result or order) in " + s.name());
             }
         }
         System.out.println("checksums OK, messages: " + nextKey);
