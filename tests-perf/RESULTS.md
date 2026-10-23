@@ -149,7 +149,29 @@ What was found on the way (perf counters per message at a fixed rate):
   the first commit sees the whole batch.
 - Deferring the header to publish (so it is written next to the commit word) did not help (8-10 vs 10-12 MT/s with
   the header written at claim) and was dropped.
-- Still open, batch 1: the commit word sits in the header and the payload starts in the same cache line, so readers
-  waiting for the commit hold that line while the payload is written - two ownership transfers per message where
-  raw (commit word last in the slot) needs one. Fix would be frames aligned so that the header ends a cache line
-  and the payload starts the next one (costs padding).
+- Batch 1: the commit word sits in the header and the payload starts in the same cache line, so readers waiting
+  for the commit hold that line while the payload is written - two ownership transfers per message where raw
+  (commit word last in the slot) needs one. Addressed by `FrameLayout.LINE_ALIGNED`, below.
+
+## Line-aligned frames (2026-10-22)
+
+`FrameLayout.LINE_ALIGNED` (`-Dperf.frames=aligned`): the header fills the last 32 bytes of a cache line, the payload
+starts on the next line, frames round up to whole lines (80-byte messages take 128); with HEADER_COMMIT the header is
+written at publish together with the commit word. Java does not expose array addresses, so the layout assumes the
+ring is a G1 humongous array (region-aligned, lines start at element 6); the wrong-phase rows are the control.
+`ab_frames.sh`, header-commit, capacity with p99 <= 10 us:
+
+| Scenario | Variant | Capacity, MT/s | p99 at 8 MT/s | Burst, MT/s |
+|---|---|---|---|---|
+| SHARDED4 | packed, batch 1 | 8 | 1.78 us | 12.2 |
+| | aligned, batch 1 | 12 (3.7 us) | 1.51 us | 14.9 |
+| | aligned with a wrong line phase, batch 1 | 10 | 1.94 us | 11.5 |
+| | aligned, batch 16 | >= 30 (3.4 us) | 1.47 us | 29.7 |
+| MULTICAST, 5 readers | packed, batch 1 | 12 | 1.44 us | 16.6 |
+| | aligned, batch 1 | 16 (2.7 us) | 0.47 us | 18.7 |
+| | aligned with a wrong line phase, batch 1 | 4 | saturated | 8.5 |
+| | aligned, batch 16 | >= 30 (1.8 us) | 0.51 us | 34.4 |
+
+Aligned frames lift header-commit at batch 1 by 30-50% and cut p99 at mid load up to 3x (MULTICAST); a wrong line
+phase loses all of it, which confirms the cache-line explanation. Raw header-commit (64-byte slots, commit word
+last) still does more at batch 1 (SHARDED4 22 MT/s).
