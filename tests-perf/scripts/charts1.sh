@@ -10,15 +10,15 @@ run() { # <samples subdir> <series> <scenario> <rates> <flags...>
     -cp "lib/*" exchange.core2.revelator.perf.PerfMain > $OUT/$dir-$series-$scen.log 2>&1
   echo "$(date +%T) $dir $series $scen exit=$?"
 }
-for r in 1 2; do
+for r in 1; do
   run equal revelator SHARDED4 1,5 -Dperf.impl=revelator
   run equal disruptor SHARDED4 1,5 -Dperf.impl=disruptor
   run equal raw SHARDED4 1,5 -Dperf.impl=raw
-  run equal revelator-header SHARDED4 1,5 -Dperf.impl=revelator -Dperf.publication=header
+  run equal revelator-header-aligned SHARDED4 1,5 -Dperf.impl=revelator -Dperf.publication=header -Dperf.frames=aligned
   [ $r = 2 ] && break
 done
 for impl in revelator disruptor raw; do
-  run slow $impl SHARDED4 1,2 -Dperf.impl=$impl -Dperf.slowShard=0 -Dperf.slowWork=1000
+  run slow $impl SHARDED4 1,2 -Dperf.impl=$impl -Dperf.slowShard=0 -Dperf.slowWork=700
 done
 for s in PIPELINE3 DIAMOND; do for impl in disruptor revelator raw; do
   run results $impl $s 1,5 -Dperf.impl=$impl -Dperf.results=true
