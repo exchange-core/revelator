@@ -175,3 +175,34 @@ ring is a G1 humongous array (region-aligned, lines start at element 6); the wro
 Aligned frames lift header-commit at batch 1 by 30-50% and cut p99 at mid load up to 3x (MULTICAST); a wrong line
 phase loses all of it, which confirms the cache-line explanation. Raw header-commit (64-byte slots, commit word
 last) still does more at batch 1 (SHARDED4 22 MT/s).
+
+## Key-based reordering, E5 (2026-10-22)
+
+`ReorderingFlowProcessor` takes a `ReorderingMessageHandler`: `signature()` gives a 64-bit key set of a message (-1
+orders it against everything), `tryHandle()` may refuse a message that is not ready yet. A refused message is
+postponed (up to 64), later messages go ahead of it unless their signature intersects a postponed one, and the
+released fence stops at the oldest postponed message. `-Dperf.bypass` runs the SHARDED4 join this way: the message
+is not ready while its owner shard is behind, the signature is one bit of a 64-bucket key hash, and the handler counts
+an error if keys of a bucket arrive out of order (`-Dperf.bypassNoOrder`, empty signatures, gives ~540k errors).
+`charts_e5.sh`, cursor publication, p50 / p90 / p99 in ns.
+
+Shard S0 spends ~1 us per message (`perf.slowShard=0`, `perf.slowWork=700`), so it is busy 25/50/75% at 1/2/3 MT/s:
+
+| Rate | revelator, in order | revelator, bypass | disruptor | raw |
+|---|---|---|---|---|
+| 1 MT/s | 379 / 1335 / 1383 | 409 / 1407 / 1471 | 531 / 1487 / 1583 | 419 / 1383 / 1423 |
+| 2 MT/s | 763 / 1335 / 1383 | 397 / 1407 / 1463 | 771 / 1479 / 1575 | 803 / 1375 / 1423 |
+| 3 MT/s | 979 / 1343 / 1487 | 393 / 1407 / 1503 | 1031 / 1463 / 1655 | 983 / 1351 / 1399 |
+
+Equal shards, nothing to reorder:
+
+| Rate | revelator, in order | revelator, bypass |
+|---|---|---|
+| 1 MT/s | 391 / 479 / 547 | 383 / 443 / 531 |
+| 5 MT/s | 467 / 619 / 787 | 501 / 727 / 959 |
+
+An in-order join stalls behind each S0 message, so p50 follows the slow shard's queue (~1 us at 75% busy) in all
+three implementations; with the bypass the messages of fast shards stay at ~0.4 us at any S0 load and only S0's own
+messages are slow (p90 ~1.4 us everywhere), p99.999 ~4 us against 8-10 us. Where nothing can be reordered the
+postpone-and-retry path costs +7% p50 and +22% p99 at 5 MT/s; a join that spins on the head message while the
+postponed list is empty would remove most of it.
