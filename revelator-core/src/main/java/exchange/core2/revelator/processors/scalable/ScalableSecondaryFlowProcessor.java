@@ -32,6 +32,9 @@ public final class ScalableSecondaryFlowProcessor implements IFlowProcessor {
                                           final RevelatorConfig config) {
 
         this.handler = handler;
+        if (config.getFrameLayout().isAligned()) {
+            throw new UnsupportedOperationException("scalable processors support the PACKED frame layout only");
+        }
         this.indexMask = config.getIndexMask();
         this.buffer = config.getBuffer();
         this.bufferSize = config.getBufferSize();

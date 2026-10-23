@@ -1,5 +1,6 @@
 package exchange.core2.revelator.perf;
 
+import exchange.core2.revelator.FrameLayout;
 import exchange.core2.revelator.Revelator;
 import exchange.core2.revelator.fences.AggregatingMinFence;
 import exchange.core2.revelator.fences.IFence;
@@ -27,12 +28,15 @@ public final class RevelatorBench implements Bench {
     private final boolean results;
     private final long[][] columns; // stage results indexed by message position, one writer each (-Dperf.results)
     private final Revelator.PublicationMode publicationMode;
+    private final FrameLayout frameLayout;
     private Revelator revelator;
     private long writtenEnd;        // end of the last written message
 
-    public RevelatorBench(Scenario scenario, int ringLongs, int work, boolean results, Revelator.PublicationMode publicationMode) {
+    public RevelatorBench(Scenario scenario, int ringLongs, int work, boolean results,
+                          Revelator.PublicationMode publicationMode, FrameLayout frameLayout) {
         this.scenario = scenario;
         this.publicationMode = publicationMode;
+        this.frameLayout = frameLayout;
         this.ringLongs = ringLongs;
         this.stages = Bench.createStages(scenario, work);
         this.results = results && scenario != Scenario.PIPELINE3_1T;
@@ -46,7 +50,7 @@ public final class RevelatorBench implements Bench {
 
     @Override
     public void start(PinnedThreadFactory threadFactory) {
-        revelator = Revelator.create(ringLongs, factory(), threadFactory, publicationMode);
+        revelator = Revelator.create(ringLongs, factory(), threadFactory, publicationMode, frameLayout);
         revelator.start();
     }
 
@@ -61,7 +65,8 @@ public final class RevelatorBench implements Bench {
                         .map(s -> (PipelinedStageHandler<PipelinedFlowSession>) new PipelinedStage(s, config.getBuffer()))
                         .toList();
                 final PipelinedFlowProcessor<PipelinedFlowSession> p = new PipelinedFlowProcessor<>(
-                        pipelined, PipelinedFlowSession::new, inbound, config.getIndexMask(), config.getBuffer());
+                        pipelined, PipelinedFlowSession::new, inbound, config.getIndexMask(), config.getBuffer(),
+                        config.getFrameLayout());
                 return new IFlowProcessorsFactory.ProcessorsChain(List.of(p), p.getReleasingFence());
             };
             case DIAMOND -> (inbound, config) -> {

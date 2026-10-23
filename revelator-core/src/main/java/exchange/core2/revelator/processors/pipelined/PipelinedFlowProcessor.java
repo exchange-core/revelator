@@ -1,6 +1,7 @@
 package exchange.core2.revelator.processors.pipelined;
 
 
+import exchange.core2.revelator.FrameLayout;
 import exchange.core2.revelator.Revelator;
 import exchange.core2.revelator.fences.IFence;
 import exchange.core2.revelator.fences.SingleWriterFence;
@@ -44,6 +45,7 @@ public class PipelinedFlowProcessor<S extends PipelinedFlowSession> implements I
 
     private final int indexMask;
     private final long[] buffer;
+    private final FrameLayout frameLayout;
 
 
     private final int[] workWeights;
@@ -60,6 +62,17 @@ public class PipelinedFlowProcessor<S extends PipelinedFlowSession> implements I
                                   final IFence inboundFence,
                                   int indexMask,
                                   long[] buffer) {
+        this(handlers, sessionsFactory, inboundFence, indexMask, buffer, FrameLayout.packed());
+    }
+
+    @SuppressWarnings("unchecked")
+    public PipelinedFlowProcessor(final List<PipelinedStageHandler<S>> handlers,
+                                  final Supplier<S> sessionsFactory,
+                                  final IFence inboundFence,
+                                  int indexMask,
+                                  long[] buffer,
+                                  FrameLayout frameLayout) {
+        this.frameLayout = frameLayout;
 
         this.handlers = handlers.toArray(x -> new PipelinedStageHandler[handlers.size()]);
         this.numHandlers = handlers.size();
@@ -175,7 +188,7 @@ public class PipelinedFlowProcessor<S extends PipelinedFlowSession> implements I
 
                     if (header1 == 0L) {
                         // empty message - skip until end of the buffer
-                        initializerOffset = (initializerOffset | indexMask) + 1;
+                        initializerOffset = frameLayout.nextLap(initializerOffset, indexMask);
 //                        log.debug("empty message - skip until end of the buffer");
                         continue;
                     }
@@ -212,7 +225,7 @@ public class PipelinedFlowProcessor<S extends PipelinedFlowSession> implements I
 //                    log.debug("initializerOffset={} -> globalOffset={}", initializerOffset, session.globalOffset);
 
 
-                    initializerOffset += Revelator.MSG_HEADER_SIZE + session.payloadSize;
+                    initializerOffset = frameLayout.nextFrame(initializerOffset + Revelator.MSG_HEADER_SIZE + session.payloadSize);
 
                     if (tailSequence == gatingSequence) {
 //                        log.info("gatingSequence reached = {}", gatingSequence);

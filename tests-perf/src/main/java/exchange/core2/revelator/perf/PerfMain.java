@@ -1,6 +1,7 @@
 package exchange.core2.revelator.perf;
 
 import exchange.core2.collections.affinity.CpuAffinity;
+import exchange.core2.revelator.FrameLayout;
 import exchange.core2.revelator.Revelator;
 import org.HdrHistogram.Histogram;
 
@@ -34,6 +35,8 @@ import java.util.Locale;
  * perf.batch     publisher makes messages visible every N messages (default 1) and always before it waits for
  *                the schedule, so batching never delays a message the publisher could not have followed anyway
  * perf.publication  cursor | header (commit word per message; Revelator and raw only)
+ * perf.frames    packed | aligned (Revelator: headers at the end of a cache line, payload on the next one;
+ *                -Drevelator.linePhase sets where lines start in the ring)
  * perf.cpus      publisher CPU, then consumer CPUs (default: reserved/isolated CPUs, highest first)
  * perf.out       CSV file to append results to, perf.label - run label for it
  * perf.samples   directory for raw latency samples of each latency step: &lt;dir&gt;/&lt;scenario&gt;-&lt;rate&gt;MTs/&lt;perf.series&gt;.csv,
@@ -86,15 +89,16 @@ public final class PerfMain {
 
         final Bench bench = switch (impl) {
             case "revelator" -> new RevelatorBench(scenario, ringMsgs * 8, work, results,
-                    headerCommit ? Revelator.PublicationMode.HEADER_COMMIT : Revelator.PublicationMode.CURSOR);
+                    headerCommit ? Revelator.PublicationMode.HEADER_COMMIT : Revelator.PublicationMode.CURSOR,
+                    "aligned".equals(System.getProperty("perf.frames")) ? FrameLayout.lineAligned() : FrameLayout.packed());
             case "disruptor" -> new DisruptorBench(scenario, ringMsgs, work, maxBatch, results);
             case "raw" -> new RawBench(scenario, ringMsgs, work, results, headerCommit);
             default -> throw new IllegalArgumentException("perf.impl: " + impl);
         };
 
-        System.out.printf("%s %s publisher cpu %d, consumers %s, work=%d, results=%s, batch=%d, publication=%s, ringMsgs=%d%n",
+        System.out.printf("%s %s publisher cpu %d, consumers %s, work=%d, results=%s, batch=%d, publication=%s, frames=%s, ringMsgs=%d%n",
                 impl, scenario, cpus[0], Arrays.toString(Arrays.copyOfRange(cpus, 1, cpus.length)), work, results,
-                batch, headerCommit ? "header" : "cursor", ringMsgs);
+                batch, headerCommit ? "header" : "cursor", System.getProperty("perf.frames", "packed"), ringMsgs);
 
         // consumer threads are created before the publisher pins itself, so they never inherit its single CPU
         bench.start(new PinnedThreadFactory(Arrays.copyOfRange(cpus, 1, cpus.length)));

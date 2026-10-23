@@ -44,9 +44,11 @@ public final class Revelator implements AutoCloseable {
 
     private long tailStrike = 0L;
 
-    // HEADER_COMMIT: start positions of claimed, not yet published messages
+    private final FrameLayout frameLayout;
+
+    // HEADER_COMMIT: claimed, not yet published messages - start, header1, timestamp, size (header1 0: header written)
     private static final int PENDING_MAX = 1024; // claims without publish beyond this publish the oldest
-    private final long[] pendingStarts = new long[PENDING_MAX];
+    private final long[] pending = new long[PENDING_MAX * 4];
     private long pendingHead = 0L;
     private long pendingTail = 0L;
 
@@ -72,6 +74,14 @@ public final class Revelator implements AutoCloseable {
                                    final IFlowProcessorsFactory flowProcessorsFactory,
                                    final ThreadFactory threadFactory,
                                    final PublicationMode publicationMode) {
+        return create(bufferSize, flowProcessorsFactory, threadFactory, publicationMode, FrameLayout.packed());
+    }
+
+    public static Revelator create(final int bufferSize,
+                                   final IFlowProcessorsFactory flowProcessorsFactory,
+                                   final ThreadFactory threadFactory,
+                                   final PublicationMode publicationMode,
+                                   final FrameLayout frameLayout) {
 
         if (!BitUtil.isPowerOfTwo(bufferSize)) {
             throw new IllegalArgumentException("Revelator buffer size must be 2^N");
@@ -90,12 +100,12 @@ public final class Revelator implements AutoCloseable {
 
         // first-level processors read either the cursor or the commit words, the rest of the chain is the same
         final IFence readersFence = publicationMode == PublicationMode.HEADER_COMMIT
-                ? new HeaderCommitFence(buffer, indexMask)
+                ? new HeaderCommitFence(buffer, indexMask, frameLayout)
                 : inboundFence;
 
         final IFlowProcessorsFactory.ProcessorsChain chain = flowProcessorsFactory.createProcessors(
                 readersFence,
-                new RevelatorConfig(indexMask, bufferSize, buffer));
+                new RevelatorConfig(indexMask, bufferSize, buffer, frameLayout));
 
 
         return new Revelator(
@@ -106,7 +116,8 @@ public final class Revelator implements AutoCloseable {
                 threadFactory,
                 inboundFence,
                 chain.getReleasingFence(),
-                publicationMode);
+                publicationMode,
+                frameLayout);
     }
 
 
@@ -117,7 +128,8 @@ public final class Revelator implements AutoCloseable {
                       final ThreadFactory threadFactory,
                       final SingleWriterFence inboundFence,
                       final IFence outboundFence,
-                      final PublicationMode publicationMode) {
+                      final PublicationMode publicationMode,
+                      final FrameLayout frameLayout) {
 
         this.bufferSize = bufferSize;
         this.indexMask = indexMask;
@@ -127,6 +139,7 @@ public final class Revelator implements AutoCloseable {
         this.inboundFence = inboundFence;
         this.releasingFence = outboundFence;
         this.publicationMode = publicationMode;
+        this.frameLayout = frameLayout;
     }
 
     public synchronized void start() {
@@ -188,7 +201,7 @@ public final class Revelator implements AutoCloseable {
 
         final int fullMessageSize = claimingPayloadSize + MSG_HEADER_SIZE;
         if (messageType < 1 || messageType > MSG_TYPE_POISON_PILL || (correlationId >>> 56) != 0
-                || claimingPayloadSize < 0 || fullMessageSize > bufferSize) {
+                || claimingPayloadSize < 0 || fullMessageSize > bufferSize - 8) {
             throw invalidClaim(claimingPayloadSize, correlationId, messageType);
         }
 
@@ -196,21 +209,27 @@ public final class Revelator implements AutoCloseable {
         int index = (int) (msgStart & indexMask);
         if (bufferSize - index < fullMessageSize) {
             msgStart = padToNextLap(msgStart, index, fullMessageSize);
-            index = 0;
+            index = (int) (msgStart & indexMask);
         } else {
             final long wrapPoint = msgStart + fullMessageSize - bufferSize;
             if (wrapPoint > cachedOutboundPosition) {
                 wrapPointCheckWaitUpdate(msgStart, wrapPoint);
             }
         }
-        reservedPosition = msgStart + fullMessageSize;
+        reservedPosition = frameLayout.nextFrame(msgStart + fullMessageSize);
 
-        buffer[index] = (((long) messageType) << 56) | correlationId;
-        buffer[index + 1] = timestamp;
-        buffer[index + 2] = claimingPayloadSize;
-        // buffer[index + 3] is the commit word in HEADER_COMMIT mode, unused with CURSOR
-        if (publicationMode == PublicationMode.HEADER_COMMIT) {
-            addPending(msgStart);
+        final long header1 = (((long) messageType) << 56) | correlationId;
+        if (publicationMode == PublicationMode.HEADER_COMMIT && frameLayout.isAligned()) {
+            // the header line is the one readers spin on: header and commit word go out together at publish
+            addPending(msgStart, header1, timestamp, claimingPayloadSize);
+        } else {
+            buffer[index] = header1;
+            buffer[index + 1] = timestamp;
+            buffer[index + 2] = claimingPayloadSize;
+            // buffer[index + 3] is the commit word in HEADER_COMMIT mode, unused with CURSOR
+            if (publicationMode == PublicationMode.HEADER_COMMIT) {
+                addPending(msgStart, 0L, 0L, 0L);
+            }
         }
         return msgStart + MSG_HEADER_SIZE;
     }
@@ -218,20 +237,25 @@ public final class Revelator implements AutoCloseable {
     // the message does not fit before the end of the ring: pad the rest of the lap, continue from the next lap
     private long padToNextLap(final long msgStart, final int index, final int fullMessageSize) {
         final long remaining = bufferSize - index;
-        wrapPointCheckWaitUpdate(msgStart, msgStart + remaining + fullMessageSize - bufferSize);
+        final long nextLapStart = frameLayout.nextFrame(msgStart + remaining);
+        wrapPointCheckWaitUpdate(msgStart, nextLapStart + fullMessageSize - bufferSize);
         buffer[index] = 0L;
         if (publicationMode == PublicationMode.HEADER_COMMIT && remaining >= MSG_HEADER_SIZE) {
             // padding has no payload: commit it now, readers cannot reach it before the messages ahead of it
             HeaderCommitFence.commit(buffer, index, msgStart);
         }
-        return msgStart + remaining;
+        return nextLapStart;
     }
 
-    private void addPending(final long msgStart) {
+    private void addPending(final long msgStart, final long header1, final long timestamp, final long payloadSize) {
         if (pendingTail - pendingHead == PENDING_MAX) {
             commitUpTo(msgStart);
         }
-        pendingStarts[(int) (pendingTail++ & (PENDING_MAX - 1))] = msgStart;
+        final int p = (int) (pendingTail++ & (PENDING_MAX - 1)) * 4;
+        pending[p] = msgStart;
+        pending[p + 1] = header1;
+        pending[p + 2] = timestamp;
+        pending[p + 3] = payloadSize;
     }
 
     private static IllegalArgumentException invalidClaim(int payloadSize, long correlationId, byte messageType) {
@@ -314,14 +338,21 @@ public final class Revelator implements AutoCloseable {
     // batch without waiting; in forward order it would chase the publisher message by message, reading each line while
     // the publisher still has to write to it.
     private void commitUpTo(final long end) {
-        final long[] starts = pendingStarts;
+        final long[] pending = this.pending;
         long upTo = pendingHead;
-        while (upTo != pendingTail && starts[(int) (upTo & (PENDING_MAX - 1))] < end) {
+        while (upTo != pendingTail && pending[(int) (upTo & (PENDING_MAX - 1)) * 4] < end) {
             upTo++;
         }
         for (long i = upTo - 1; i >= pendingHead; i--) {
-            final long start = starts[(int) (i & (PENDING_MAX - 1))];
-            HeaderCommitFence.commit(buffer, (int) (start & indexMask), start);
+            final int p = (int) (i & (PENDING_MAX - 1)) * 4;
+            final long start = pending[p];
+            final int index = (int) (start & indexMask);
+            if (pending[p + 1] != 0L) {
+                buffer[index] = pending[p + 1];
+                buffer[index + 1] = pending[p + 2];
+                buffer[index + 2] = pending[p + 3];
+            }
+            HeaderCommitFence.commit(buffer, index, start);
         }
         pendingHead = upTo;
     }

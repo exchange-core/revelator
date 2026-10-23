@@ -42,6 +42,9 @@ public final class ScalablePrimaryFlowProcessor implements IFlowProcessor {
         this.secondaryProcessors = processors;
         this.shardClassifier = shardClassifier;
         this.inboundFence = inboundFence;
+        if (config.getFrameLayout().isAligned()) {
+            throw new UnsupportedOperationException("scalable processors support the PACKED frame layout only");
+        }
         this.indexMask = config.getIndexMask();
         this.buffer = config.getBuffer();
         this.bufferSize = config.getBufferSize();

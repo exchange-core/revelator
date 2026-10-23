@@ -1,5 +1,6 @@
 package exchange.core2.revelator.fences;
 
+import exchange.core2.revelator.FrameLayout;
 import exchange.core2.revelator.Revelator;
 
 import java.lang.invoke.MethodHandles;
@@ -27,11 +28,13 @@ public final class HeaderCommitFence implements IFence {
     private final long[] buffer;
     private final int indexMask;
     private final int bufferSize;
+    private final FrameLayout frameLayout;
 
-    public HeaderCommitFence(long[] buffer, int indexMask) {
+    public HeaderCommitFence(long[] buffer, int indexMask, FrameLayout frameLayout) {
         this.buffer = buffer;
         this.indexMask = indexMask;
         this.bufferSize = indexMask + 1;
+        this.frameLayout = frameLayout;
     }
 
     /**
@@ -59,7 +62,7 @@ public final class HeaderCommitFence implements IFence {
             final int index = (int) (pos & indexMask);
             if (bufferSize - index < Revelator.MSG_HEADER_SIZE) {
                 // no header fits before the end of the ring: implicit padding, confirmed only by a commit after it
-                pos = (pos | indexMask) + 1;
+                pos = frameLayout.nextLap(pos, indexMask);
                 continue;
             }
             final long commit = (long) LONGS.getAcquire(buffer, index + COMMIT_OFFSET);
@@ -67,8 +70,8 @@ public final class HeaderCommitFence implements IFence {
                 break;
             }
             pos = buffer[index] == 0L
-                    ? (pos | indexMask) + 1                                  // padding header: skip to the next lap
-                    : pos + Revelator.MSG_HEADER_SIZE + buffer[index + 2];
+                    ? frameLayout.nextLap(pos, indexMask)                    // padding header: skip to the next lap
+                    : frameLayout.nextFrame(pos + Revelator.MSG_HEADER_SIZE + buffer[index + 2]);
             committed = pos;
         }
         return committed;

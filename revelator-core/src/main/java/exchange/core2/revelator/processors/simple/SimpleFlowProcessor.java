@@ -1,5 +1,6 @@
 package exchange.core2.revelator.processors.simple;
 
+import exchange.core2.revelator.FrameLayout;
 import exchange.core2.revelator.Revelator;
 import exchange.core2.revelator.RevelatorConfig;
 import exchange.core2.revelator.fences.HeaderCommitFence;
@@ -21,6 +22,7 @@ public final class SimpleFlowProcessor implements IFlowProcessor {
     private final int indexMask;
     private final long[] buffer;
     private final int bufferSize;
+    private final FrameLayout frameLayout;
 
     // release consumed space at least this often (in longs): with an unbounded batch a full ring was released only
     // after processing all of it, so publisher and consumer took turns instead of running in parallel
@@ -40,6 +42,7 @@ public final class SimpleFlowProcessor implements IFlowProcessor {
         this.indexMask = config.getIndexMask();
         this.buffer = config.getBuffer();
         this.bufferSize = config.getBufferSize();
+        this.frameLayout = config.getFrameLayout();
     }
 
     @Override
@@ -87,7 +90,7 @@ public final class SimpleFlowProcessor implements IFlowProcessor {
                 if (header1 == 0L) {
                     // skip until end of the buffer
 
-                    final long endOfLoopSeq = (positionSeq | indexMask) + 1;
+                    final long endOfLoopSeq = frameLayout.nextLap(positionSeq, indexMask);
 //                log.debug("Zero message: SKIP positionSeq={} -> endOfLoopSeq={} ({} bytes)", positionSeq, endOfLoopSeq, endOfLoopSeq - positionSeq);
                     positionSeq = endOfLoopSeq;
                     continue;
@@ -148,7 +151,7 @@ public final class SimpleFlowProcessor implements IFlowProcessor {
 
 //                    releasingFence.setRelease(positionSeq);
 
-                    positionSeq += Revelator.MSG_HEADER_SIZE + payloadSize;
+                    positionSeq = frameLayout.nextFrame(positionSeq + Revelator.MSG_HEADER_SIZE + payloadSize);
 
                     if (positionSeq - releasedSeq >= RELEASE_EVERY) {
                         releasingFence.setRelease(positionSeq);
@@ -183,7 +186,7 @@ public final class SimpleFlowProcessor implements IFlowProcessor {
 
             if (bufferSize - index < Revelator.MSG_HEADER_SIZE) {
                 // implicit padding: no header fits before the end of the ring
-                positionSeq = (positionSeq | indexMask) + 1;
+                positionSeq = frameLayout.nextLap(positionSeq, indexMask);
                 continue;
             }
 
@@ -201,7 +204,7 @@ public final class SimpleFlowProcessor implements IFlowProcessor {
 
             if (header1 == 0L) {
                 // padding header: skip to the next lap
-                positionSeq = (positionSeq | indexMask) + 1;
+                positionSeq = frameLayout.nextLap(positionSeq, indexMask);
                 continue;
             }
 
@@ -229,7 +232,7 @@ public final class SimpleFlowProcessor implements IFlowProcessor {
                 log.debug("Exception when processing message", ex);
             }
 
-            positionSeq += Revelator.MSG_HEADER_SIZE + payloadSize;
+            positionSeq = frameLayout.nextFrame(positionSeq + Revelator.MSG_HEADER_SIZE + payloadSize);
 
             if (++unreleased == HEADER_RELEASE_EVERY) {
                 releasingFence.setRelease(positionSeq);
