@@ -6,7 +6,7 @@ implementation per JVM, results appended to a CSV.
 
 ## Scenarios
 
-Every scenario fits into 6 isolated cores: one publisher plus at most 5 consumer threads.
+Every scenario but `DOUBLE_DIAMOND` fits into 6 isolated cores: one publisher plus at most 5 consumer threads.
 
 | Scenario | Shape | Consumer threads |
 |---|---|---|
@@ -15,16 +15,19 @@ Every scenario fits into 6 isolated cores: one publisher plus at most 5 consumer
 | `PIPELINE3_1T` | A, B, C on one thread: Revelator `PipelinedFlowProcessor`, Disruptor/raw one handler running A, B, C | 1 |
 | `MULTICAST3` | P → {A, B, C}, each sees every message | 3 |
 | `DIAMOND` | P → {A, B} → C, C waits for both | 3 |
+| `DOUBLE_DIAMOND` | P → {A, B} → C → {D, E} → F | 6 |
 | `SHARDED4` | P → {S0..S3} by key % 4 → J | 5 |
 
 In `SHARDED4` the Revelator join waits only for the shard that owns the message (conditional fence with cached
 bounds); a Disruptor barrier can only wait for the minimum over all four shards.
 
 Each message is a timestamp plus 6 longs. Every stage sums the payload (checked against the publisher at the end) and
-can do `perf.work` extra multiply-adds. Terminal stages record the latency of every 16th message.
+can do `perf.work` extra multiply-adds. With `-Dperf.memKb=N` it also does `perf.memReads` random reads per message
+in its own array of N KB. Terminal stages record the latency of every 16th message.
 
 With `-Dperf.results=true` every stage also writes a result that downstream stages read and verify (B reads A in
-PIPELINE3, C reads A and B in DIAMOND, J reads the owner shard in SHARDED4; MULTICAST3 stages only write).
+PIPELINE3, C reads A and B in DIAMOND; in DOUBLE_DIAMOND also D and E read C, F reads D and E; J reads the owner
+shard in SHARDED4; MULTICAST3 stages only write).
 Disruptor writes into the event, the usual way (a larger event class is used only in this mode); Revelator and raw
 write into a separate column per stage, one writer each.
 

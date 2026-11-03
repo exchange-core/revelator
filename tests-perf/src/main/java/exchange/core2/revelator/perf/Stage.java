@@ -45,6 +45,11 @@ public final class Stage extends StageRhsPad {
         }
     }
 
+    // -Dperf.memKb=N -Dperf.memReads=M: M random reads per message in a private array of N KB, a stage with its own state
+    private static final int MEM_KB = Integer.getInteger("perf.memKb", 0);
+    private static final int MEM_READS = Integer.getInteger("perf.memReads", 8);
+    private final long[] mem = MEM_KB > 0 ? new long[MEM_KB * 128] : null;
+
     private final String name;
     private final int id;         // index in the scenario's stage list
     private final long shard;     // -1: every message, otherwise only keys with (key & shardMask) == shard
@@ -83,6 +88,16 @@ public final class Stage extends StageRhsPad {
                 x ^= x << 17;
             }
             sink ^= x;
+        }
+        if (MEM_KB > 0) {
+            long r = payloadSum | 1;
+            long s = 0;
+            final int n = mem.length;
+            for (int i = 0; i < MEM_READS; i++) {
+                r *= 0x9E37_79B9_7F4A_7C15L;
+                s += mem[(int) ((r >>> 32) * n >>> 32)];
+            }
+            sink ^= s;
         }
         if (recorder != null && sampled(key)) {
             final long latency = Math.max(0L, System.nanoTime() - timestamp);

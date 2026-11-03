@@ -35,6 +35,13 @@ public interface Bench {
                     new Stage("A", 0, -1, 1, work, false),
                     new Stage("B", 1, -1, 1, work, false),
                     new Stage("C", 2, -1, 1, work, true));
+            case DOUBLE_DIAMOND -> List.of(
+                    new Stage("A", 0, -1, 1, work, false),
+                    new Stage("B", 1, -1, 1, work, false),
+                    new Stage("C", 2, -1, 1, work, false),
+                    new Stage("D", 3, -1, 1, work, false),
+                    new Stage("E", 4, -1, 1, work, false),
+                    new Stage("F", 5, -1, 1, work, true));
             case MULTICAST -> java.util.stream.IntStream.range(0, Scenario.readers())
                     .mapToObj(i -> new Stage("R" + i, i, -1, 1, work, true)).toList();
             case MULTICAST3 -> List.of(
@@ -57,6 +64,12 @@ public interface Bench {
         return switch (scenario) {
             case PIPELINE3 -> stage == 0 ? new int[0] : new int[]{stage - 1};
             case DIAMOND -> stage == 2 ? new int[]{0, 1} : new int[0];
+            case DOUBLE_DIAMOND -> switch (stage) {
+                case 2 -> new int[]{0, 1};
+                case 3, 4 -> new int[]{2};
+                case 5 -> new int[]{3, 4};
+                default -> new int[0];
+            };
             default -> new int[0];
         };
     }

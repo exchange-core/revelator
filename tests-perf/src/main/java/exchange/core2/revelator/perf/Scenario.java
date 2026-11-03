@@ -1,7 +1,8 @@
 package exchange.core2.revelator.perf;
 
 /**
- * Pipeline shapes. Threads = consumer threads; with the publisher every scenario fits into 6 isolated cores.
+ * Pipeline shapes. Threads = consumer threads; with the publisher every scenario fits into 6 isolated cores,
+ * except DOUBLE_DIAMOND (7).
  */
 public enum Scenario {
 
@@ -19,6 +20,9 @@ public enum Scenario {
 
     /** P -> {A, B} -> C, C waits for both */
     DIAMOND(3),
+
+    /** P -> {A, B} -> C -> {D, E} -> F */
+    DOUBLE_DIAMOND(6),
 
     /** P -> {S0..S3}, shard i handles keys with key % 4 == i, then J joins: J waits for the shard of each message */
     SHARDED4(5),

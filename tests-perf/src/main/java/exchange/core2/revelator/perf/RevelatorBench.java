@@ -78,6 +78,17 @@ public final class RevelatorBench implements Bench {
                 final SimpleFlowProcessor c = new SimpleFlowProcessor(h.get(2), ab, config);
                 return new IFlowProcessorsFactory.ProcessorsChain(List.of(a, b, c), c.getReleasingFence());
             };
+            case DOUBLE_DIAMOND -> (inbound, config) -> {
+                final SimpleFlowProcessor a = new SimpleFlowProcessor(h.get(0), inbound, config);
+                final SimpleFlowProcessor b = new SimpleFlowProcessor(h.get(1), inbound, config);
+                final IFence ab = new AggregatingMinFence(new IFence[]{a.getReleasingFence(), b.getReleasingFence()});
+                final SimpleFlowProcessor c = new SimpleFlowProcessor(h.get(2), ab, config);
+                final SimpleFlowProcessor d = new SimpleFlowProcessor(h.get(3), c.getReleasingFence(), config);
+                final SimpleFlowProcessor e = new SimpleFlowProcessor(h.get(4), c.getReleasingFence(), config);
+                final IFence de = new AggregatingMinFence(new IFence[]{d.getReleasingFence(), e.getReleasingFence()});
+                final SimpleFlowProcessor f = new SimpleFlowProcessor(h.get(5), de, config);
+                return new IFlowProcessorsFactory.ProcessorsChain(List.of(a, b, c, d, e, f), f.getReleasingFence());
+            };
             case SHARDED4 -> (inbound, config) -> {
                 final List<IFlowProcessor> processors = new ArrayList<>();
                 final IFence[] shardFences = new IFence[Scenario.SHARDS];

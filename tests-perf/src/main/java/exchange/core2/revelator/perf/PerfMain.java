@@ -22,12 +22,15 @@ import java.util.Locale;
  * Revelator vs Disruptor on the same scenario, one framework per JVM. Settings (system properties):
  * <pre>
  * perf.impl      revelator | disruptor | raw (hand-written ring, the floor)
- * perf.scenario  UNICAST | PIPELINE3 | PIPELINE3_1T | MULTICAST3 | DIAMOND | SHARDED4 | MULTICAST (perf.readers)
+ * perf.scenario  UNICAST | PIPELINE3 | PIPELINE3_1T | MULTICAST3 | DIAMOND | DOUBLE_DIAMOND | SHARDED4 |
+ *                MULTICAST (perf.readers)
  * perf.stopAtP99Us  stop the latency sweep after the first step with p99 above this or a publisher that fell behind
  * perf.rates     offered loads for the latency phase, millions of messages per second (default 1,5,10,20)
  * perf.seconds   duration of each latency step (default 2)
  * perf.burst     messages per throughput burst (default 20M), perf.bursts - number of bursts (default 5)
  * perf.work      extra xorshift rounds per message in every stage (default 0 - pure transport; ~1.4 ns each on rhel-lat)
+ * perf.memKb, perf.memReads  every stage does memReads (default 8) random reads per message in its own array of
+ *                memKb KB (default 0 - no array), a stage with state of its own
  * perf.results   stages write a result that downstream stages read and verify (default false): Disruptor into the
  *                event, Revelator and raw into a separate column per stage
  * perf.ringMsgs  Disruptor ring size; Revelator gets ringMsgs*8 longs, about the same bytes (default 131072)

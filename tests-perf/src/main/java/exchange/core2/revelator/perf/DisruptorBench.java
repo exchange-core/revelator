@@ -50,6 +50,7 @@ public final class DisruptorBench implements Bench {
                 case MULTICAST3 -> disruptor.handleEventsWith(f.get(0), f.get(1), f.get(2));
                 case MULTICAST -> disruptor.handleEventsWith(f.toArray(EventProcessorFactory[]::new));
                 case DIAMOND -> disruptor.handleEventsWith(f.get(0), f.get(1)).then(f.get(2));
+                case DOUBLE_DIAMOND -> disruptor.handleEventsWith(f.get(0), f.get(1)).then(f.get(2)).then(f.get(3), f.get(4)).then(f.get(5));
                 // the join can only wait for the minimum over all shards
                 case SHARDED4 -> disruptor.handleEventsWith(f.get(0), f.get(1), f.get(2), f.get(3)).then(f.get(4));
                 default -> throw new IllegalStateException();
@@ -104,6 +105,7 @@ public final class DisruptorBench implements Bench {
         }
     }
 
+    // DOUBLE_DIAMOND F (stage 5) overwrites r4 after reading it: nobody runs after F, and the event stays this size
     static final class ResultEvent extends Event {
         long r0, r1, r2, r3, r4;
 

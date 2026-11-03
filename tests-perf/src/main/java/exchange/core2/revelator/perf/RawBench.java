@@ -93,6 +93,15 @@ public final class RawBench implements Bench {
                 runners.add(runner(2, progress[0], progress[1]));
                 gating = new Cursor[]{progress[2]};
             }
+            case DOUBLE_DIAMOND -> {
+                runners.add(runner(0, source));
+                runners.add(runner(1, source));
+                runners.add(runner(2, progress[0], progress[1]));
+                runners.add(runner(3, progress[2]));
+                runners.add(runner(4, progress[2]));
+                runners.add(runner(5, progress[3], progress[4]));
+                gating = new Cursor[]{progress[5]};
+            }
             case SHARDED4 -> {
                 for (int i = 0; i < Scenario.SHARDS; i++) {
                     runners.add(runner(i, source));
