@@ -1,67 +1,86 @@
-# Revelator framework
+# Revelator 0.5 (development)
 
-[![][license img]][license]
+A single-producer Java runtime for low-latency pipelines. The supported baseline is cursor publication
+with packed frames. Handlers can run in a chain, in parallel, or as cooperative stages on one owner thread.
 
-Revelator is a **low latency messages processing** framework in Java 26 (experimental).
+## Why Revelator
 
-### Features
+* Run several pipeline stages on one owner thread. While one operation waits for a dependency,
+  the thread can prepare or advance other work while keeping owner-local state in cache.
+* Check only the dependencies relevant to an operation, directly from application code. Cache attained
+  bounds locally; keep readiness, the business decision and permission to reclaim memory distinct.
+* Process available messages as batches and publish progress within a batch. Balance throughput and
+  follower latency rather than making the entire input burst an indivisible unit.
+* Experiment with key-based reordering while preserving conflicts and a safe reclamation prefix.
 
-* With the original Disruptor design, EventHandler is dealing with each incoming message independently by performing
-complete piece work over it. With Revelator it is possible to easily handle different processing stages on the same
-core, depending on how other cores are progressing (relying on relevant memory fences). This design allows to utilize L1
-and L2 caches much more efficiently, and avoid unnecessary cache coherency traffic. It is also possible to do as much as
-possible work when receiving batches of messages - Revelator operates as a Kanban-style processor - refer to the
-PipelinedFlowProcessor.java for more details.
+These are the design goals. Cooperative stages and experimental reordering exist; a reusable conditional
+business gate and comprehensive metrics remain development work. The same-owner and selective-dependency
+choices are the reason for this project, not a claim that every workload beats another runtime.
 
-* A pool of fixed number of parallel message processors does not always work well. Volatile reads contention increases the
-message processing latency. For latency-critical services, Revelator will offer a more efficient scaling design, where
-more worker threads can facilitate spikes.
+[Apache License 2.0](LICENSE).
 
-* To combine N multiple fences into a single sequential constraint, Diruptor only has a min-aggregation rule (
-SequenceGroup.java), where the handler always makes N volatile reads and then processes all available messages up to a
-less progressing predecessor. There is no simple way to conditionally wait for specific sequence barriers. For
-latency-critical services, Revelator offers a more flexible design to improve mean latency - it is possible to define a
-function that maps message properties (such as account id) into a relevant fence, therefore avoiding unnecessary
-volatile reads.
+## Java and dependencies
 
-* In the Disruptor - message handlers are not batch-aware. There is no way to break a large spike batch into smaller
-pieces, so that the follower can start catching up earlier, before the batch is completed. The Revelator offers such
-functionality to provide optimal balance between latency and throughput.
+Java **22 or newer** is required. All default modules compile with `--release 22`. The affinity dependency
+uses the final Foreign Function and Memory API and ships Java 22 bytecode (class major 66); Java 26/27 is
+not required by the source/API baseline. Validation here uses JDK 26 to compile against the Java 22 API.
+Runtime validation on a real JDK 22 is still required before tagging a release.
 
-* Revelator will support extended metrics collection. It can be helpful when identifying bottlenecks of the processing
-pipeline and measuring latency penalties in each processing stage.
+`collections-affinity:0.6.1-SNAPSHOT` must be available in the local Maven repository. It remains an
+unreleased external dependency: publish/pin a released Java-22-compatible affinity artifact before
+publishing Revelator 0.5. A matching external collections checkout can build/install affinity; do not
+silently substitute a different snapshot version. A successful local build does not prove fresh-machine
+availability of that dependency.
 
-### Modules
+For native affinity operations use `--enable-native-access=ALL-UNNAMED` on the classpath. The basic examples
+use ordinary threads and do not call affinity. Pinning is optional behavior; the existing adapter is kept
+for compatibility. The adapter exposes physical-core pinning; there is no logical-core compatibility alias.
 
-| Module | Contents |
-|---|---|
-| `revelator-core` | rings, fences, flow processors (simple, pipelined, scalable) |
-| `revelator-raft` | RAFT consensus and replicated state machine (experimental) |
-| `revelator-examples` | payments with two-phase transfers between account shards, primes pipeline |
-| `tests-common` | latency measurement helpers |
-| `tests-perf` | Revelator vs LMAX Disruptor benchmarks, see [tests-perf/README.md](tests-perf/README.md) |
+## Build
 
-### Installation
-
-1. Install the modules into your Maven's local repository by running `mvn install`
-2. Add the following Maven dependency to your project's `pom.xml`:
-
-```
-<dependency>
-    <groupId>exchange.core2</groupId>
-    <artifactId>revelator-core</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
-</dependency>
+```sh
+mvn verify
+mvn install
 ```
 
-### Usage examples
+Modules: `revelator-core`, `revelator-examples`, `tests-common`, `tests-perf`. RAFT has been removed.
+Historical scalable/business experiments are referenced in docs/HISTORY.md rather than copied outside the build. Performance runs are manual, see tests-perf.
 
-See `revelator-examples`.
+## Minimal usage
 
-### Contributing
+```java
+long[] sum = {0};
+try (Revelator r = Revelator.create(1024,
+        ProcessorsFactories.single((b, i, n, ts, start, id, type) -> sum[0] += b[i]),
+        Thread::new)) {
+    r.start();
+    long payload = r.claimSingleMessage(1, System.nanoTime(), 1, (byte) 1);
+    r.writeLongData(payload, 0, 42);
+    r.publish(payload + 1);
+}
+// close drained and joined the handler: sum[0] == 42
+```
 
-Revelator is an open-source project and contributions are welcome!
+Complete runnable examples: BasicExample and CooperativeExample in `revelator-examples`.
 
-[license]:LICENSE
+## Contracts and operations
 
-[license img]:https://img.shields.io/badge/License-Apache%202-blue.svg
+See [API contract](docs/API.md), [release notes](RELEASE_NOTES.md) and [release checklist](docs/RELEASE.md).
+Only one producer may claim/write/publish. Fully fill a claim before making another claim: admission can
+flush the earlier batch when the ring needs space. Publish a complete prefix by its payload end; publish the remaining batch before shutdown. All sizes
+and positions use long words, not bytes. The input buffer is borrowed until the handler finishes.
+
+Before shutdown, quiesce the producer and publish its last batch. `stopAsync(Duration)` returns immediately;
+shutdown admission and joins run on a dedicated daemon coordinator with a deadline. `close()` waits for a
+30-second drain. No new publication is accepted during/after shutdown. Worker exceptions fail the runtime,
+interrupt peers and surface through shutdown; no failed command is silently skipped or retried. Handlers
+must cooperate with interruption; applied effects are not rolled back. Never call close from a worker.
+
+Busy spinning intentionally uses a CPU while idle. Observe `state()`, `failure()`, and `getTailStrike()`;
+there is no automatic scaling, idle parking or comprehensive metrics service in this version.
+
+HEADER_COMMIT is an experimental explicit PublicationMode opt-in. Successor invalidation protects
+variable frames; look-ahead ownership is included in producer gating. Cursor remains the default.
+LINE_ALIGNED remains experimental and depends on documented JVM/GC layout assumptions. Reordering is
+experimental: signatures must include all conflicts, false must have no observable effects, and reclaim
+progress remains a contiguous prefix rather than per-message completion.
