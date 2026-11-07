@@ -42,6 +42,7 @@ public final class ReorderingFlowProcessor implements IFlowProcessor {
                                    final IFence inboundFence,
                                    final RevelatorConfig config,
                                    final int maxPostponed) {
+        if (maxPostponed <= 0) throw new IllegalArgumentException("maxPostponed must be positive");
         this.handler = handler;
         this.inboundFence = inboundFence;
         this.indexMask = config.getIndexMask();
@@ -61,6 +62,7 @@ public final class ReorderingFlowProcessor implements IFlowProcessor {
         int sincePublish = 0;
 
         while (true) {
+            if (Thread.currentThread().isInterrupted()) return;
 
             final long blocked = postponed == 0 ? 0L : retryPostponed();
 
@@ -105,7 +107,7 @@ public final class ReorderingFlowProcessor implements IFlowProcessor {
             }
 
             final long signature = handler.signature(buffer, index + Revelator.MSG_HEADER_SIZE, payloadSize, msgType);
-            if ((signature & blocked) != 0 || !handle(index, positionSeq, header1, payloadSize, msgType)) {
+            if ((postponed != 0 && (signature == -1L || blocked == -1L)) || (signature & blocked) != 0 || !handle(index, positionSeq, header1, payloadSize, msgType)) {
                 postponedPosition[postponed] = positionSeq;
                 postponedSignature[postponed] = signature;
                 postponed++;
@@ -139,7 +141,7 @@ public final class ReorderingFlowProcessor implements IFlowProcessor {
         for (int i = 0; i < postponed; i++) {
             final long position = postponedPosition[i];
             final long signature = postponedSignature[i];
-            if ((signature & stillBlocked) == 0) {
+            if ((kept == 0 || (signature != -1L && stillBlocked != -1L)) && (signature & stillBlocked) == 0) {
                 final int index = (int) (position & indexMask);
                 final long header1 = buffer[index];
                 if (handle(index, position, header1, (int) buffer[index + 2], (byte) ((int) (header1 >>> 56) & 0x1F))) {
@@ -160,8 +162,7 @@ public final class ReorderingFlowProcessor implements IFlowProcessor {
             return handler.tryHandle(buffer, index + Revelator.MSG_HEADER_SIZE, payloadSize, buffer[index + 1], position,
                     header1 & 0x00FF_FFFF_FFFF_FFFFL, msgType);
         } catch (final Exception ex) {
-            log.debug("Exception when processing message at {}", position, ex);
-            return true;
+            throw new IllegalStateException("handler failed at frame " + position, ex);
         }
     }
 

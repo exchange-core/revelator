@@ -14,6 +14,7 @@ public interface ReorderingMessageHandler {
     long signature(long[] buffer, int index, int msgSize, byte msgType);
 
     /**
+     * A false result must leave no observable effects; the signature stays stable across retries.
      * @return false if the message cannot be handled yet (a dependency is not ready); it will be offered again
      */
     boolean tryHandle(long[] buffer, int index, int msgSize, long timestamp, long globalOffset, long correlationId, byte msgType);
