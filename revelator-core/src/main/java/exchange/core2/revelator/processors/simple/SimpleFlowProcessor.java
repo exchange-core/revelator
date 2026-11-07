@@ -177,6 +177,7 @@ public final class SimpleFlowProcessor implements IFlowProcessor {
      */
     private void runHeaderCommit() {
 
+        final HeaderCommitFence commits = (HeaderCommitFence) inboundFence;
         long positionSeq = 0L;
         long releasedSeq = 0L;
         int unreleased = 0;
@@ -192,7 +193,7 @@ public final class SimpleFlowProcessor implements IFlowProcessor {
                 continue;
             }
 
-            if (!HeaderCommitFence.isCommitted(buffer, index, positionSeq)) {
+            if (!commits.isCommitted(index, positionSeq)) {
                 if (positionSeq != releasedSeq) {
                     releasingFence.setRelease(positionSeq);
                     releasedSeq = positionSeq;
