@@ -1,20 +1,8 @@
-# Revelator examples
+# Java 22 examples
 
-[![][license img]][license]
+BasicExample publishes 100 values and drains the runtime on close. CooperativeExample prepares private
+session state and retries application until an external atomic permission is available. Both use ordinary
+threads and need no native access flag. Native affinity is optional and described in the root README.
 
-Revelator is a **low latency messages processing** framework in Java 17.
-
-This project contains examples for different usages of the framework.
-
-### Payments
-
-Accounting system built on top of Revelator framework.
-It demonstrates a microservice for high-speed money transfer between different accounts, similar to PayPal.
-
-### Contributing
-
-Revelator is an open-source project and contributions are welcome!
-
-[license]:LICENSE
-
-[license img]:https://img.shields.io/badge/License-Apache%202-blue.svg
+Legacy payments, primes and manual crypto workloads are referenced in ../docs/HISTORY.md and are not built or
+advertised as reference implementations. In particular payments retains known readiness/settlement issues.

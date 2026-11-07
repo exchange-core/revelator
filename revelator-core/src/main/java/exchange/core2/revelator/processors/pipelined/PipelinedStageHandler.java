@@ -10,6 +10,7 @@ public interface PipelinedStageHandler<S extends PipelinedFlowSession> {
     boolean process(S messageSession);
 
 
-    int getHitWorkWeight();
 
+    /** Called once after all admitted messages drain on graceful shutdown. */
+    default void onShutdown() {}
 }

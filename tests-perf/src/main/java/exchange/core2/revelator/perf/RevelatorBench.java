@@ -280,9 +280,5 @@ public final class RevelatorBench implements Bench {
             return true;
         }
 
-        @Override
-        public int getHitWorkWeight() {
-            return 1;
-        }
     }
 }

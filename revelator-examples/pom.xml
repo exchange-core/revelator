@@ -11,38 +11,24 @@
 
     <artifactId>revelator-examples</artifactId>
     <name>${project.groupId}:${project.artifactId}</name>
-    <description>Revelator examples: payments with sharded accounts, primes pipeline</description>
+    <description>Revelator examples: Basic and cooperative examples</description>
 
     <dependencies>
         <dependency>
             <groupId>exchange.core2</groupId>
             <artifactId>revelator-core</artifactId>
         </dependency>
-        <dependency>
-            <groupId>exchange.core2</groupId>
-            <artifactId>tests-common</artifactId>
-        </dependency>
-        <dependency>
+            <dependency>
             <groupId>exchange.core2</groupId>
             <artifactId>test-generator</artifactId>
             <version>0.7.12-SNAPSHOT</version>
         </dependency>
-        <dependency>
-            <groupId>org.eclipse.collections</groupId>
-            <artifactId>eclipse-collections</artifactId>
-        </dependency>
-        <dependency>
+            <dependency>
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-lang3</artifactId>
             <version>3.12.0</version>
         </dependency>
-        <!-- test-generator declares it as provided -->
-        <dependency>
-            <groupId>org.apache.commons</groupId>
-            <artifactId>commons-math3</artifactId>
-            <version>3.6.1</version>
-        </dependency>
-        <dependency>
+            <dependency>
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>
         </dependency>
