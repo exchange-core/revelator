@@ -52,7 +52,6 @@
         <collections.version>0.6.1-SNAPSHOT</collections.version>
         <disruptor.version>4.0.0</disruptor.version>
         <agrona.version>2.6.0</agrona.version>
-        <eclipse.collections.version>13.0.0</eclipse.collections.version>
         <hdr.histogram.version>2.2.2</hdr.histogram.version>
         <slf4j.version>2.0.9</slf4j.version>
         <logback.version>1.6.3</logback.version>
@@ -92,16 +91,6 @@
                 <groupId>org.agrona</groupId>
                 <artifactId>agrona</artifactId>
                 <version>${agrona.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.eclipse.collections</groupId>
-                <artifactId>eclipse-collections-api</artifactId>
-                <version>${eclipse.collections.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.eclipse.collections</groupId>
-                <artifactId>eclipse-collections</artifactId>
-                <version>${eclipse.collections.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.hdrhistogram</groupId>
