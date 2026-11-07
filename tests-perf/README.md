@@ -1,5 +1,7 @@
 # tests-perf
 
+Results are in [RESULTS.md](RESULTS.md); the sections before "0.5 development" were measured on the 0.1 code.
+
 Revelator vs LMAX Disruptor 4.0.0 on the same pipeline shapes, plus `raw` - a hand-written ring (long[] of 64-byte
 slots, one progress counter per stage, cached dependency bounds) that marks the floor for each shape. One
 implementation per JVM, results appended to a CSV.

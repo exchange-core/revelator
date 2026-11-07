@@ -2,8 +2,9 @@
 
 * Single producer: claim, payload writes and publish are one producer's responsibility. Shutdown callers
   must first stop/join that producer and publish outstanding claims; shutdown is not a second concurrent producer.
-* `capacityLongs` and `payloadLongs` count 64-bit words. claim returns payload start; publish takes an endExclusive on a complete frame boundary, including a prefix of several claims. Correlation IDs have 56 bits. Application message types are 1..30;
-  31 is reserved for runtime shutdown. Type 30 has no special runtime meaning.
+* `capacityLongs` and `payloadLongs` count 64-bit words. claim returns payload start; publish takes the end
+  of a claimed message: the last one, or an earlier one to publish a prefix of the batch. Correlation IDs have 56
+  bits. Application message types are 1..30; 31 is reserved for runtime shutdown. Type 30 has no special runtime meaning.
 * All earlier claims must be fully filled before the next claim: admission may publish them for progress.
   Ordinary stores and writeLongDataUnsafe are trusted low-level writes, not checked message transactions.
   If filling fails, abort the runtime rather than publishing partial data. There is no transactional rollback.
@@ -21,9 +22,11 @@
   application recovery. A timeout cannot forcibly stop a handler that ignores interruption.
 * Full-ring admission spins and checks failure/interruption. Use a bounded external admission policy if
   application-level tryClaim is required; this version does not provide nonblocking claims.
-* Standard CURSOR supports simple/cooperative/reordering processors. HEADER_COMMIT is experimental and requires successor invalidation, initial marker initialization,
-  padding handoff and ownership of the look-ahead header. It is opt-in through PublicationMode. Scalable
-  sources are outside the runtime artifact. LINE_ALIGNED and reordering retain experimental status.
+* CURSOR is the default and works with every processor. HEADER_COMMIT is experimental: commit words are the
+  position XOR-ed with a random tag of the ring (HeaderCommitFence.tag() for a publisher outside of Revelator), so
+  a stale payload word passes for a commit with probability 2^-64.
+  LINE_ALIGNED assumes where cache lines start in the ring (G1 humongous array, -Drevelator.linePhase) and is
+  experimental, as is reordering.
 
 A processor factory must return a nonempty graph and a gating fence covering every reader of borrowed data.
 Custom processors must cooperate with interruption and publish only their actual completed prefix.

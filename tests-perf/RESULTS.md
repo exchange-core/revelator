@@ -206,3 +206,29 @@ three implementations; with the bypass the messages of fast shards stay at ~0.4 
 messages are slow (p90 ~1.4 us everywhere), p99.999 ~4 us against 8-10 us. Where nothing can be reordered the
 postpone-and-retry path costs +7% p50 and +22% p99 at 5 MT/s; a join that spins on the head message while the
 postponed list is empty would remove most of it.
+
+## 0.5 development against 0.1 (2026-11-06)
+
+`scripts/ab_release.sh`: a7adc42 (baseline) and the 0.5 development code (candidate) alternate, 3 runs each, JDK 27,
+rhel-lat with HT on (JVM on CPUs 1,3, threads on the isolated 5..15), batch 1 unless noted; medians, p50 / p99 ns.
+
+| Config | Scenario | Rate | Baseline | Candidate |
+|---|---|---|---|---|
+| cursor | UNICAST | 1 / 5 / 10 MT/s | 239/291, 208/301, 283/531 | 204/297, 200/303, 277/527 |
+| cursor | SHARDED4 | 1 / 5 MT/s | 367/505, 467/791 | 375/519, 475/807 |
+| cursor | PIPELINE3_1T | 5 / 10 MT/s | 239/419, 6687/7007 | 219/347, 365/983 |
+| header, aligned | MULTICAST, 5 readers | 5 / 10 MT/s | 218/393, 248/671 | 222/401, 275/771 |
+| header, aligned, batch 16 | SHARDED4 | 5 / 10 / 20 MT/s | 351/735, 863/2175, 1295/2495 | 349/743, 887/2255, 1391/2495 |
+
+Burst, MT/s (median, min-max): UNICAST 30.6 (24.7-103) / 105.8 (104-106), SHARDED4 8.4 / 8.1, PIPELINE3_1T
+18.1 (16.4-26.9) / 26.8 (25.8-27.0), MULTICAST5 header 20.0 / 17.2, SHARDED4 header b16 30.5 / 30.9.
+
+On the way there:
+
+* The rewritten PipelinedFlowProcessor first published progress after every message: PIPELINE3_1T burst 25.8 -> 12.6
+  MT/s and 10 MT/s saturated (p50 6.3 us). Publishing when caught up with the producer or every 4096 longs fixed it.
+* Clearing the commit word of the next frame before publishing (deterministic protection against payload left in
+  that place) cost MULTICAST5 header b1 a third: burst 19.8 -> 13.7 MT/s, p50 at 10 MT/s 250 -> 930 ns, the same
+  whether cleared at publish or at claim; without the clearing (probe) the numbers were the baseline's. The likely
+  reason is that readers have the next lines prefetched, so the extra store takes the line away from 5 cores. A random
+  tag per ring in the commit word replaced it.

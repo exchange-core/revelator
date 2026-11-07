@@ -1,20 +1,25 @@
 # 0.5.0-SNAPSHOT
 
-* Removed revelator-raft and Chronicle dependency management.
-* Target Java 22, including the existing affinity runtime dependency. No preview flags are required.
-* Added lifecycle states, bounded asynchronous drain, effective close, fail-stop worker supervision,
-  publication-after-stop rejection and overflow-safe claim validation.
-* Experimental HEADER_COMMIT uses successor invalidation, look-ahead gating and safe padding handoff.
-* Removed incomplete scalable experiments from the runtime; source history is linked in docs/HISTORY.md.
-* Replaced the cooperative loop with a bounded reusable-session pipeline, explicit frame positions,
-  reset hook, shutdown callbacks and continuous actual completion publication.
-* Handler failures are fatal across supported processors. Global reorder barriers also order empty signatures.
-* Replaced unfinished payments/primes/crypto examples with basic and cooperative examples; history is linked.
+* Java 22 is the minimum: collections-affinity uses the final FFM API (class files major 66). No preview flags.
+* Removed revelator-raft (and the Chronicle dependency), the scalable processors and the old payments/primes
+  examples; where to find them is in docs/HISTORY.md. revelator-examples has two small programs instead.
+* Lifecycle: NEW -> RUNNING -> STOPPING -> TERMINATED, or FAILED. `close()` drains and joins (it used to do
+  nothing); `stopAsync(Duration)` returns at once and fails after the timeout; a handler exception stops the
+  whole ring instead of being logged and skipped; claims and publishes after stop are rejected.
+* `publish(end)` takes the end of any claimed message (a prefix of the batch), not an arbitrary position.
+* HEADER_COMMIT (experimental): the commit word is the position XOR-ed with a random tag of the ring instead of a
+  constant, so payload left from the previous lap cannot be made to look like a commit (2^-64 by chance). Padding
+  is published right away, which removes a deadlock when a large message follows padding.
+* PipelinedFlowProcessor rewritten: the shutdown message is no longer handed to stages, sessions get
+  `frameStart`/`endExclusive` and a `reset()` hook, stages get `onShutdown()`, and progress is published when the
+  processor has caught up with the producer or every 4096 longs (it used to be published only when all 64 sessions
+  were done).
+* ReorderingFlowProcessor: a barrier (signature -1) is no longer passed by messages with signature 0 and does
+  not pass them.
+* Removed ExceptionHandler, MSG_TYPE_TEST_CONTROL handling, `getHitWorkWeight`, the session `globalOffset` and
+  `AFFINITY_LOGICAL_CORE` (it pinned whole cores anyway).
 
-Breaking changes: successful close now drains/joins; publish accepts complete claimed prefixes;
-message type 31 is runtime-only; removed ExceptionHandler stub, unused compatibility shims and scalable
-runtime classes. The thread factory adapter exposes physical-core pinning only. Re-run performance baselines: historical header/scalable/pipeline results
-are not claims about the changed runtime. No new performance figures are claimed in this change.
+Measured against a7adc42 on rhel-lat: tests-perf/RESULTS.md, "0.5 development".
 
-Before a release tag: resolve the external affinity SNAPSHOT, verify on real JDK 22 and target Linux,
-and run the release checklist. This development version is not a published 0.5 release.
+Before a release: release collections-affinity (it was not part of collections 0.6.0), run the tests on JDK 22
+and 25, see docs/RELEASE.md.
