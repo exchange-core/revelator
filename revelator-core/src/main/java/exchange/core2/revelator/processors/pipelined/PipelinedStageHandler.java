@@ -9,8 +9,6 @@ public interface PipelinedStageHandler<S extends PipelinedFlowSession> {
      */
     boolean process(S messageSession);
 
-
-
     /** Called once after all admitted messages drain on graceful shutdown. */
     default void onShutdown() {}
 }

@@ -8,7 +8,6 @@ public class PipelinedFlowSession {
     /** Payload end, exclusive, in long words. */
     public long endExclusive;
 
-
     public int bufferIndex;
 
     public int payloadSize;
