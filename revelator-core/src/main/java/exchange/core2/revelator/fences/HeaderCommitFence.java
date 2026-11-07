@@ -11,8 +11,8 @@ import java.lang.invoke.VarHandle;
  * with release semantics after the rest of the message, and readers scan commit words from their own position.
  * Readers wait on the lines they have to read anyway instead of a cursor line that every message rewrites.
  * <p>
- * The commit word holds the message position, so a word left from a previous lap never matches. It is XOR-ed with a
- * constant so that payload data left at that index (small numbers, positions) does not look like a commit either.
+ * The commit word holds the message position, so a word left from a previous lap never matches. The XOR constant is only a tag, not a safety proof. Safety requires the producer to invalidate
+ * each reachable successor before publishing the predecessor, including the first marker after padding.
  * <p>
  * Stateless: one instance serves all readers, each passes its own position.
  */
@@ -44,6 +44,13 @@ public final class HeaderCommitFence implements IFence {
         LONGS.setRelease(buffer, index + COMMIT_OFFSET, (position + 1) ^ COMMIT_MAGIC);
     }
 
+    /** Invalidates the next reachable marker before releasing its predecessor. The producer must own
+     * this cell, including the look-ahead reservation. Batch commits invalidate only their successor
+     * before committing in reverse order, so a later commit in that batch is never erased. */
+    public static void invalidate(final long[] buffer, final int index) {
+        buffer[index + COMMIT_OFFSET] = 0L;
+    }
+
     /**
      * Acquire-reads the commit word of the message (or padding header) that starts at the position.
      */
@@ -61,8 +68,9 @@ public final class HeaderCommitFence implements IFence {
         for (int n = 0; n < MAX_SCAN; n++) {
             final int index = (int) (pos & indexMask);
             if (bufferSize - index < Revelator.MSG_HEADER_SIZE) {
-                // no header fits before the end of the ring: implicit padding, confirmed only by a commit after it
+                // no header fits before the end of the ring: implicit padding; the preceding committed frame fixes this boundary
                 pos = frameLayout.nextLap(pos, indexMask);
+                committed = pos; // geometry alone proves that no frame fits in this tail
                 continue;
             }
             final long commit = (long) LONGS.getAcquire(buffer, index + COMMIT_OFFSET);

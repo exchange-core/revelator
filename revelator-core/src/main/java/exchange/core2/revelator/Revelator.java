@@ -19,12 +19,10 @@ public final class Revelator implements AutoCloseable {
     public static final int MSG_HEADER_SIZE = 4;
     public static final byte MSG_TYPE_POISON_PILL = 31;
 
-    /** Legacy application control type; the runtime no longer interprets its payload. */
-    public static final byte MSG_TYPE_TEST_CONTROL = 30;
 
     public enum PublicationMode {
         CURSOR,
-        /** Disabled: unsafe for variable-sized frames. */
+        /** Experimental successor-invalidating per-frame publication. */
         HEADER_COMMIT
     }
 
@@ -43,6 +41,10 @@ public final class Revelator implements AutoCloseable {
     private final SingleWriterFence inboundFence;
     private final IFence releasingFence;
     private final FrameLayout frameLayout;
+    private final PublicationMode publicationMode;
+    private static final int PENDING_MAX = 1024;
+    private final long[] pending = new long[PENDING_MAX * 4];
+    private long pendingHead, pendingTail;
     private final List<Thread> threads = new CopyOnWriteArrayList<>();
     private final CompletableFuture<Void> termination = new CompletableFuture<>();
     private volatile State state = State.NEW;
@@ -78,9 +80,6 @@ public final class Revelator implements AutoCloseable {
         Objects.requireNonNull(threads);
         Objects.requireNonNull(layout);
         Objects.requireNonNull(mode);
-        if (mode != PublicationMode.CURSOR)
-            throw new UnsupportedOperationException(
-                    "HEADER_COMMIT is disabled: variable-frame metadata can alias old payload");
         if (capacityLongs < 1024 || !BitUtil.isPowerOfTwo(capacityLongs))
             throw new IllegalArgumentException("capacityLongs must be a power of two >= 1024");
         SingleWriterFence input = new SingleWriterFence();
@@ -88,12 +87,12 @@ public final class Revelator implements AutoCloseable {
         var chain =
                 Objects.requireNonNull(
                         factory.createProcessors(
-                                input,
+                                mode == PublicationMode.HEADER_COMMIT ? new HeaderCommitFence(data, capacityLongs - 1, layout) : input,
                                 new RevelatorConfig(
                                         capacityLongs - 1, capacityLongs, data, layout)));
         if (chain.getProcessors().isEmpty())
             throw new IllegalArgumentException("processor graph must not be empty");
-        return new Revelator(data, chain, threads, input, layout);
+        return new Revelator(data, chain, threads, input, layout, mode);
     }
 
     private Revelator(
@@ -101,7 +100,8 @@ public final class Revelator implements AutoCloseable {
             IFlowProcessorsFactory.ProcessorsChain chain,
             ThreadFactory tf,
             SingleWriterFence input,
-            FrameLayout layout) {
+            FrameLayout layout, PublicationMode mode) {
+        publicationMode = mode;
         buffer = data;
         bufferSize = data.length;
         indexMask = data.length - 1;
@@ -133,6 +133,7 @@ public final class Revelator implements AutoCloseable {
                                             }
                                         }),
                                 "threadFactory returned null");
+                if (t.getName().startsWith("Thread-")) t.setName("PROC-" + threads.size());
                 threads.add(t);
                 t.start();
             }
@@ -167,7 +168,7 @@ public final class Revelator implements AutoCloseable {
             int payloadLongs, long timestamp, long correlationId, byte type) {
         requireRunning();
         if (payloadLongs < 0
-                || payloadLongs > bufferSize - 8 - MSG_HEADER_SIZE
+                || payloadLongs > bufferSize - (publicationMode == PublicationMode.HEADER_COMMIT ? 16 : 8) - MSG_HEADER_SIZE
                 || type < 1
                 || type >= MSG_TYPE_POISON_PILL
                 || (correlationId >>> 56) != 0)
@@ -176,52 +177,133 @@ public final class Revelator implements AutoCloseable {
         return claim(payloadLongs, timestamp, correlationId, type);
     }
 
+    // Keep the common claim path small. Padding, gating and invalid publication are cold paths.
     private long claim(int payloadLongs, long timestamp, long id, byte type) {
-        int full = payloadLongs + MSG_HEADER_SIZE;
+        final int full = payloadLongs + MSG_HEADER_SIZE;
         long start = reservedPosition;
         int index = (int) (start & indexMask);
         if (bufferSize - index < full) {
-            long next = frameLayout.nextLap(start, indexMask);
-            awaitSpace(start, next + full - bufferSize);
-            buffer[index] = 0;
-            start = next;
+            start = padToNextLap(start, index);
             index = (int) (start & indexMask);
-        } else if (start + full - bufferSize > cachedOutboundPosition)
-            awaitSpace(start, start + full - bufferSize);
-        lastClaimEnd = start + full;
-        reservedPosition = frameLayout.nextFrame(lastClaimEnd);
-        buffer[index] = ((long) type << 56) | id;
-        buffer[index + 1] = timestamp;
-        buffer[index + 2] = payloadLongs;
+        }
+        final long end = start + full;
+        final long wrap = (publicationMode == PublicationMode.HEADER_COMMIT ? lookAheadEnd(end) : end) - bufferSize;
+        if (wrap > cachedOutboundPosition) awaitSpace(start, wrap);
+        lastClaimEnd = end;
+        reservedPosition = frameLayout.nextFrame(end);
+        final long header = ((long) type << 56) | id;
+        if (publicationMode == PublicationMode.HEADER_COMMIT && frameLayout.isAligned()) {
+            addPending(start, header, timestamp, payloadLongs);
+        } else {
+            buffer[index] = header;
+            buffer[index + 1] = timestamp;
+            buffer[index + 2] = payloadLongs;
+            if (publicationMode == PublicationMode.HEADER_COMMIT) addPending(start, 0, 0, payloadLongs);
+        }
         return start + MSG_HEADER_SIZE;
     }
 
+    private long successor(long frameEnd) {
+        long next = frameLayout.nextFrame(frameEnd);
+        return bufferSize - (int)(next & indexMask) < MSG_HEADER_SIZE ? frameLayout.nextLap(next, indexMask) : next;
+    }
+
+    private long lookAheadEnd(long frameEnd) { return successor(frameEnd) + MSG_HEADER_SIZE; }
+
+    private void invalidateSuccessor(long frameEnd) {
+        HeaderCommitFence.invalidate(buffer, (int)(successor(frameEnd) & indexMask));
+    }
+
+    private long padToNextLap(long start, int index) {
+        flushComplete(lastClaimEnd);
+        final long next = frameLayout.nextLap(start, indexMask);
+        // Reclaim the next-lap marker before clearing it: it can still belong to an old live frame.
+        final long wrap = (publicationMode == PublicationMode.HEADER_COMMIT ? next + MSG_HEADER_SIZE : next) - bufferSize;
+        if (wrap > cachedOutboundPosition) awaitSpace(start, wrap);
+        buffer[index] = 0;
+        if (publicationMode == PublicationMode.HEADER_COMMIT) {
+            HeaderCommitFence.invalidate(buffer, (int)(next & indexMask));
+            if (bufferSize - index >= MSG_HEADER_SIZE) HeaderCommitFence.commit(buffer, index, start);
+        } else {
+            inboundFence.setRelease(next);
+        }
+        // Publish padding before waiting for a large next-lap frame; otherwise admission can deadlock.
+        reservedPosition = next;
+        return next;
+    }
+
+    private void addPending(long start, long header, long timestamp, long payloadLongs) {
+        if (pendingTail - pendingHead == PENDING_MAX) commitUpTo(start);
+        int p = (int)(pendingTail++ & (PENDING_MAX - 1)) * 4;
+        pending[p] = start; pending[p + 1] = header; pending[p + 2] = timestamp; pending[p + 3] = payloadLongs;
+    }
+
+    private void commitUpTo(long end) {
+        long upTo = pendingHead;
+        while (upTo != pendingTail && pending[(int)(upTo & (PENDING_MAX - 1)) * 4] < end) upTo++;
+        if (upTo == pendingHead) return;
+        int last = (int)((upTo - 1) & (PENDING_MAX - 1)) * 4;
+        long lastEnd = pending[last] + MSG_HEADER_SIZE + pending[last + 3];
+        // Clear only the successor of the whole batch before reverse commits. Clearing a successor
+        // during that reverse loop would erase the next frame's already-published commit.
+        invalidateSuccessor(lastEnd);
+        for (long i = upTo - 1; i >= pendingHead; i--) {
+            int p = (int)(i & (PENDING_MAX - 1)) * 4;
+            long start = pending[p]; int index = (int)(start & indexMask);
+            if (pending[p + 1] != 0) {
+                buffer[index] = pending[p + 1]; buffer[index + 1] = pending[p + 2]; buffer[index + 2] = pending[p + 3];
+            }
+            HeaderCommitFence.commit(buffer, index, start);
+        }
+        pendingHead = upTo;
+        publishedPosition = lastEnd;
+    }
+
+    private void flushComplete(long end) {
+        if (publicationMode == PublicationMode.HEADER_COMMIT) commitUpTo(end);
+        else if (end > publishedPosition) { inboundFence.setRelease(end); publishedPosition = end; }
+    }
+
     private void awaitSpace(long start, long wrap) {
-        // Each previous claim must already be fully written. Flush it before waiting for consumers.
-        inboundFence.setVolatile(start);
-        publishedPosition = lastClaimEnd;
+        flushComplete(lastClaimEnd);
         long min;
         while (wrap > (min = Math.min(releasingFence.getAcquire(cachedOutboundPosition), start))) {
             if (state == State.FAILED) throw new IllegalStateException("consumer failed", failure);
             if (Thread.currentThread().isInterrupted() || System.nanoTime() > stopDeadline)
                 throw new CancellationException("ring admission cancelled");
-            tailStrike++;
-            Thread.onSpinWait();
+            // parkNanos(1) measured about 50 us here and collapsed saturated throughput.
+            tailStrike++; Thread.onSpinWait();
         }
         cachedOutboundPosition = min;
     }
 
-    /**
-     * Publishes the complete outstanding batch. The argument must be its last payload end
-     * (exclusive).
-     */
+    /** Publish a complete prefix, ending on a claimed payload boundary. */
     public void publish(long endExclusive) {
         requireRunning();
-        if (endExclusive != lastClaimEnd || endExclusive < publishedPosition)
-            throw new IllegalArgumentException(
-                    "publish requires the end of the last claimed payload");
-        inboundFence.setRelease(endExclusive);
-        publishedPosition = endExclusive;
+        if (endExclusive != lastClaimEnd) validatePrefix(endExclusive);
+        flushComplete(endExclusive);
+    }
+
+    private void validatePrefix(long end) {
+        if (end == publishedPosition) return;
+        if (end < publishedPosition || end > lastClaimEnd) throw new IllegalArgumentException("invalid publication prefix");
+        if (publicationMode == PublicationMode.HEADER_COMMIT) {
+            for(long i=pendingHead; i<pendingTail; i++) {
+                int p=(int)(i & (PENDING_MAX-1))*4;
+                if(pending[p]+MSG_HEADER_SIZE+pending[p+3]==end) return;
+            }
+        } else {
+            long pos=publishedPosition==0 ? 0 : frameLayout.nextFrame(publishedPosition);
+            while(pos<end) {
+                int index=(int)(pos & indexMask);
+                if(bufferSize-index<MSG_HEADER_SIZE || buffer[index]==0) {pos=frameLayout.nextLap(pos,indexMask);continue;}
+                long frameEnd=pos+MSG_HEADER_SIZE+buffer[index+2];
+                if(frameEnd==end)return;
+                if(frameEnd<=pos || frameEnd>end)break;
+                pos=frameLayout.nextFrame(frameEnd);
+            }
+        }
+        throw new IllegalArgumentException("publish requires a claimed payload end");
     }
 
     public void writeLongData(long payloadPosition, int offset, long value) {
@@ -283,7 +365,7 @@ public final class Revelator implements AutoCloseable {
                         () -> {
                             try {
                                 long end = claim(0, 0, 0, MSG_TYPE_POISON_PILL);
-                                inboundFence.setRelease(end);
+                                flushComplete(end);
                                 for (Thread t : threads) {
                                     while (t.isAlive()) {
                                         long remaining = stopDeadline - System.nanoTime();
