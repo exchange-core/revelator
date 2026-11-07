@@ -10,7 +10,6 @@
 
     <modules>
         <module>revelator-core</module>
-        <module>revelator-raft</module>
         <module>tests-common</module>
         <module>revelator-examples</module>
         <module>tests-perf</module>
@@ -54,7 +53,6 @@
         <disruptor.version>4.0.0</disruptor.version>
         <agrona.version>2.6.0</agrona.version>
         <eclipse.collections.version>13.0.0</eclipse.collections.version>
-        <chronicle.bytes.version>2.19.32</chronicle.bytes.version>
         <hdr.histogram.version>2.2.2</hdr.histogram.version>
         <slf4j.version>2.0.9</slf4j.version>
         <logback.version>1.6.3</logback.version>
@@ -70,11 +68,6 @@
             <dependency>
                 <groupId>${project.groupId}</groupId>
                 <artifactId>revelator-core</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>${project.groupId}</groupId>
-                <artifactId>revelator-raft</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
@@ -109,18 +102,6 @@
                 <groupId>org.eclipse.collections</groupId>
                 <artifactId>eclipse-collections</artifactId>
                 <version>${eclipse.collections.version}</version>
-            </dependency>
-            <!-- RAFT state machine snapshots; the transitive OpenHFT affinity is not used -->
-            <dependency>
-                <groupId>net.openhft</groupId>
-                <artifactId>chronicle-bytes</artifactId>
-                <version>${chronicle.bytes.version}</version>
-                <exclusions>
-                    <exclusion>
-                        <groupId>net.openhft</groupId>
-                        <artifactId>affinity</artifactId>
-                    </exclusion>
-                </exclusions>
             </dependency>
             <dependency>
                 <groupId>org.hdrhistogram</groupId>
