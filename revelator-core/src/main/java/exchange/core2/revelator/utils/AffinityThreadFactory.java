@@ -48,14 +48,13 @@ public final class AffinityThreadFactory implements ThreadFactory {
         }
     }
 
-    // CpuAffinity always reserves the whole physical core, so both modes behave the same
+    // The adapter reserves a physical core; logical CPU pinning is an explicit CpuAffinity API.
     private synchronized CpuAffinity getAffinityLockSync() {
         return CpuAffinity.acquireCore();
     }
 
     public enum ThreadAffinityMode {
         AFFINITY_PHYSICAL_CORE,
-        AFFINITY_LOGICAL_CORE,
         NO_AFFINITY
     }
 

@@ -28,6 +28,7 @@ public class ProcessorsFactories {
     }
 
     public static IFlowProcessorsFactory parallel(final Collection<SimpleMessageHandler> handlers) {
+        if (handlers.isEmpty()) throw new IllegalArgumentException("parallel graph must not be empty");
 
         return (inboundFence, config) -> {
 
@@ -51,6 +52,7 @@ public class ProcessorsFactories {
     }
 
     public static IFlowProcessorsFactory chain(final List<SimpleMessageHandler> handlers) {
+        if (handlers.isEmpty()) throw new IllegalArgumentException("chain must not be empty");
 
         return (inboundFence, config) -> {
 

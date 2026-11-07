@@ -57,10 +57,12 @@ public final class SimpleFlowProcessor implements IFlowProcessor {
         long releasedSeq = 0L;
 
         while (true) {
+            if (Thread.currentThread().isInterrupted()) return;
 
             long availableSeq;
             int c = 0;
             while ((availableSeq = inboundFence.getAcquire(positionSeq)) <= positionSeq) {
+                if (Thread.currentThread().isInterrupted()) return;
                 Thread.onSpinWait();
 //                LockSupport.parkNanos(1L);
 //                    if (c++ == 100) {
@@ -127,7 +129,7 @@ public final class SimpleFlowProcessor implements IFlowProcessor {
 //                log.debug("custom payloadSize={}", payloadSize);
 
                     final int indexMsg = index + Revelator.MSG_HEADER_SIZE;
-                    if (indexMsg + payloadSize > bufferSize) {
+                    if (payloadSize < 0 || payloadSize > bufferSize - indexMsg) {
                         throw new IllegalStateException("Failed to decode message: headerSize=" + Revelator.MSG_HEADER_SIZE
                                 + " payloadSize=" + payloadSize
                                 + " correlationId=" + correlationId
@@ -143,8 +145,7 @@ public final class SimpleFlowProcessor implements IFlowProcessor {
                         handler.handleMessage(buffer, indexMsg, payloadSize, timestamp, positionSeq, correlationId, msgType);
 //                log.debug("DONE");
                     } catch (final Exception ex) {
-                        log.debug("Exception when processing batch", ex);
-                        // TODO call custom handler
+                        throw new IllegalStateException("handler failed at frame " + positionSeq, ex);
                     }
 
 //            log.debug("positionSeq: {}->{} ", positionSeq, positionSeq + headerSize + payloadSize );
@@ -163,8 +164,8 @@ public final class SimpleFlowProcessor implements IFlowProcessor {
             }
 
 //            log.debug("RELEASE {}", availableSeq);
-            releasingFence.setRelease(availableSeq);
-            releasedSeq = availableSeq;
+            releasingFence.setRelease(positionSeq);
+            releasedSeq = positionSeq;
         }
 
     }
@@ -181,6 +182,7 @@ public final class SimpleFlowProcessor implements IFlowProcessor {
         int unreleased = 0;
 
         while (true) {
+            if (Thread.currentThread().isInterrupted()) return;
 
             final int index = (int) (positionSeq & indexMask);
 
@@ -196,6 +198,7 @@ public final class SimpleFlowProcessor implements IFlowProcessor {
                     releasedSeq = positionSeq;
                     unreleased = 0;
                 }
+                if (Thread.currentThread().isInterrupted()) return;
                 Thread.onSpinWait();
                 continue;
             }
@@ -221,7 +224,7 @@ public final class SimpleFlowProcessor implements IFlowProcessor {
             final long timestamp = buffer[index + 1];
             final int payloadSize = (int) buffer[index + 2];
             final int indexMsg = index + Revelator.MSG_HEADER_SIZE;
-            if (indexMsg + payloadSize > bufferSize) {
+            if (payloadSize < 0 || payloadSize > bufferSize - indexMsg) {
                 throw new IllegalStateException("Failed to decode message: payloadSize=" + payloadSize
                         + " correlationId=" + correlationId + " at " + positionSeq);
             }
@@ -229,8 +232,8 @@ public final class SimpleFlowProcessor implements IFlowProcessor {
             try {
                 handler.handleMessage(buffer, indexMsg, payloadSize, timestamp, positionSeq, correlationId, msgType);
             } catch (final Exception ex) {
-                log.debug("Exception when processing message", ex);
-            }
+                        throw new IllegalStateException("handler failed at frame " + positionSeq, ex);
+                    }
 
             positionSeq = frameLayout.nextFrame(positionSeq + Revelator.MSG_HEADER_SIZE + payloadSize);
 
