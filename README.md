@@ -44,21 +44,17 @@ RAFT, the scalable processors and the old payments/primes examples were removed 
 
 ### Installation
 
-Java 22 or newer: the thread pinning dependency `collections-affinity` uses the FFM API. It is not released yet,
-install it from [exchange-collections](https://github.com/exchange-core/exchange-collections) (`mvn install`) first.
-
-1. Install the modules into your Maven's local repository by running `mvn install`
-2. Add the following Maven dependency to your project's `pom.xml`:
+Java 25 or newer. Add the following Maven dependency to your project's `pom.xml`:
 
 ```
 <dependency>
     <groupId>exchange.core2</groupId>
     <artifactId>revelator-core</artifactId>
-    <version>0.5.0-SNAPSHOT</version>
+    <version>0.5.0</version>
 </dependency>
 ```
 
-Pinning needs `--enable-native-access=ALL-UNNAMED`.
+Thread pinning (AffinityThreadFactory) needs `--enable-native-access=ALL-UNNAMED`. To build from sources: `mvn install`.
 
 ### Usage
 

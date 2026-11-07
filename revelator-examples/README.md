@@ -1,4 +1,4 @@
-# Java 22 examples
+# Examples
 
 BasicExample publishes 100 values and drains the runtime on close. CooperativeExample prepares private
 session state and retries application until an external atomic permission is available. Both use ordinary

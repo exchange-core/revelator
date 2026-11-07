@@ -1,6 +1,7 @@
-# 0.5.0-SNAPSHOT
+# 0.5.0 (2026-11-07)
 
-* Java 22 is the minimum: collections-affinity uses the final FFM API (class files major 66). No preview flags.
+* Java 25 is the minimum. Thread pinning comes from collections-affinity 0.7.0 (Maven Central), which uses the FFM
+  API.
 * Removed revelator-raft (and the Chronicle dependency), the scalable processors and the old payments/primes
   examples; where to find them is in docs/HISTORY.md. revelator-examples has two small programs instead.
 * Lifecycle: NEW -> RUNNING -> STOPPING -> TERMINATED, or FAILED. `close()` drains and joins (it used to do
@@ -20,6 +21,3 @@
   `AFFINITY_LOGICAL_CORE` (it pinned whole cores anyway).
 
 Measured against a7adc42 on rhel-lat: tests-perf/RESULTS.md, "0.5 development".
-
-Before a release: release collections-affinity (it was not part of collections 0.6.0), run the tests on JDK 22
-and 25, see docs/RELEASE.md.

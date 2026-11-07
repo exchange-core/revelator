@@ -1,7 +1,7 @@
 # Release checklist
 
 1. Verify supported API, ordering, borrowing and lifecycle contracts in API.md against current behavior.
-2. Run mvn verify with JDK 22 and the deployed JDK on Linux and Windows; execute the native affinity
+2. Run mvn verify with JDK 25 (the minimum) and the deployed JDK on Linux and Windows; execute the native affinity
    adapter on supported target hardware with native access enabled. Do not infer OS support from compilation.
 3. Publish/pin a released affinity dependency, then build with an empty Maven cache and no adjacent checkouts.
 4. Install the artifacts and build/run an external consumer using only declared dependencies and BasicExample.
