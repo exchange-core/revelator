@@ -61,5 +61,9 @@ mvn dependency:copy-dependencies -pl tests-perf -DoutputDirectory=target/lib -Di
 ./perf.sh <label> <repeats> [scenarios...]     # results/<label>/results.csv, summary.md
 ```
 
+DOUBLE_DIAMOND needs 7 CPUs, more than the 6 isolated cores: `perf.sh` pins its stages to `DD_CPUS` (default
+15,13,11,9,7,5,3) and moves the JVM to `DD_JVM` (default 1,17, CPU 1 and its sibling). `REV_DIR` picks another
+directory with `lib/` and `summarize.py`, `PLACE` replaces the whole `taskset`/`numactl` prefix.
+
 Single run: `java --enable-native-access=ALL-UNNAMED -Dperf.impl=disruptor -Dperf.scenario=DIAMOND -cp "lib/*" exchange.core2.revelator.perf.PerfMain`.
 All settings are listed in `PerfMain`.

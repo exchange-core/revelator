@@ -232,3 +232,24 @@ On the way there:
   whether cleared at publish or at claim; without the clearing (probe) the numbers were the baseline's. The likely
   reason is that readers have the next lines prefetched, so the extra store takes the line away from 5 cores. A random
   tag per ring in the commit word replaced it.
+
+## DOUBLE_DIAMOND (2026-11-12)
+
+`perf.sh dd 3 DOUBLE_DIAMOND`: P -> {A, B} -> C -> {D, E} -> F, publisher on CPU 15, stages on 13, 11, 9, 7, 5, 3,
+JVM on 1 and 17 (HT on). Cursor publication, batch 1, packed frames, `perf.work=0`. Medians of 3 runs, p50 / p99 /
+p99.99 us. "fix" is db92b86 (claim writes the header after the space wait), "main" is 741b89c (0.5.0 + snapshot).
+
+| MT/s | Revelator fix | Revelator main | Disruptor | raw |
+|---|---|---|---|---|
+| 1 | 0.65 / 0.78 / 1.81 | 0.64 / 0.76 / 1.83 | 0.73 / 0.95 / 1.98 | 0.59 / 0.73 / 1.80 |
+| 5 | 0.75 / 1.06 / 2.16 | 0.73 / 0.99 / 2.19 | 0.88 / 1.43 / 2.54 | 0.78 / 1.09 / 2.22 |
+| 10 | 1.19 / 2.32 / 4.03 | 33 ms (sent 9.7) | 45 / 221 / 297 | 1.33 / 3.66 / 6.59 |
+| 20 | 25 ms (sent 19.9) | 1.1 s (sent 9.7) | 0.9 s (sent 10.8) | 19 / 134 / 477 |
+| burst, MT/s | 105.5 (104.9-106.3) | 12.2 (11.5-12.9) | 11.1 (10.0-11.5) | 132 (64-143) |
+
+- main holds 10 MT/s in 1 run of 3 (9.3 and 9.7 in the others) and bursts at 12 MT/s: the same publisher store-buffer
+  limit as MULTICAST3 and DIAMOND since a756779. The fix holds 10 MT/s in all runs and bursts at 105 MT/s.
+- At 20 MT/s Revelator sends the full rate but falls behind (ms latency, all 3 runs); raw held it in 2 runs of 3.
+- At 1-5 MT/s Disruptor is 10-20% behind Revelator and raw; the four hops from P to F cost 0.6-0.9 us at p50.
+- All checksums OK. The earlier double-diamond runs (2026-11-01, `~/bench-ht/ht-dd.sh`, scratch classes,
+  `perf.work=50`, also on shared cores) are not comparable to these.
