@@ -242,22 +242,27 @@ public final class Revelator implements AutoCloseable {
             msgStart = padToNextLap(msgStart, index);
             index = (int) (msgStart & indexMask);
         }
-        final long msgEnd = msgStart + fullMessageSize;
-        final long header1 = (((long) messageType) << 56) | correlationId;
         if (publicationMode == PublicationMode.HEADER_COMMIT) {
-            claimCommitted(msgStart, msgEnd, index, header1, timestamp, payloadLongs);
+            final long msgEnd = msgStart + fullMessageSize;
+            claimCommitted(msgStart, msgEnd, index, (((long) messageType) << 56) | correlationId, timestamp, payloadLongs);
+            lastClaimEnd = msgEnd;
+            reservedPosition = frameLayout.nextFrame(msgEnd);
         } else {
-            final long wrapPoint = msgEnd - bufferSize;
+            // Nothing derived is computed before the wait: values live across that call are kept on the stack, and C2
+            // stored them there on the common path too (11 extra stores per message made the publisher store-buffer
+            // bound with readers on its heels, MULTICAST3 20 -> 9 MT/s).
+            final long wrapPoint = msgStart + fullMessageSize - bufferSize;
             if (wrapPoint > cachedOutboundPosition) {
                 awaitSpace(msgStart, wrapPoint);
             }
-            buffer[index] = header1;
+            buffer[index] = (((long) messageType) << 56) | correlationId;
             buffer[index + 1] = timestamp;
             buffer[index + 2] = payloadLongs;
             // buffer[index + 3] is the commit word in HEADER_COMMIT mode, unused with CURSOR
+            final long msgEnd = msgStart + fullMessageSize;
+            lastClaimEnd = msgEnd;
+            reservedPosition = frameLayout.nextFrame(msgEnd);
         }
-        lastClaimEnd = msgEnd;
-        reservedPosition = frameLayout.nextFrame(msgEnd);
         return msgStart + MSG_HEADER_SIZE;
     }
 
